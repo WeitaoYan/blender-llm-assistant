@@ -20,6 +20,4 @@ Thumbs.db
 # Environment
 .env
 .env.*
-# test
-tests/
 .pytest_cache/
