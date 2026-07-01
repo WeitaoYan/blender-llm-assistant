@@ -1,5 +1,5 @@
 [project]
-name = "blender-mcp-server"
+name = "blender-llm-mcp"
 version = "0.1.0"
 description = "MCP server for Blender 3D — expose Blender modeling tools via Model Context Protocol"
 readme = "README.md"
@@ -26,12 +26,12 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-org/blender-assistant"
-Repository = "https://github.com/your-org/blender-assistant"
-Documentation = "https://github.com/your-org/blender-assistant#readme"
+Homepage = "https://github.com/WeitaoYan/blender-llm-assistant"
+Repository = "https://github.com/WeitaoYan/blender-llm-assistant"
+Documentation = "https://github.com/WeitaoYan/blender-llm-assistant#readme"
 
 [project.scripts]
-blender-mcp-server = "mcp_server.main:run"
+blender-llm-mcp = "mcp_server.main:run"
 
 [build-system]
 requires = ["setuptools>=64"]

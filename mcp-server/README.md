@@ -1,4 +1,4 @@
-# blender-mcp-server
+# blender-llm-mcp
 
 MCP (Model Context Protocol) server for Blender 3D.
 
@@ -6,20 +6,20 @@ Connect AI assistants to Blender via [Model Context Protocol](https://modelconte
 
 ## Usage
 
-Requires the [Blender LLM Assistant](https://github.com/your-org/blender-assistant) addon running in Blender (HTTP API on `127.0.0.1:15800`).
+Requires the [Blender LLM Assistant](https://github.com/WeitaoYan/blender-llm-assistant) addon running in Blender (HTTP API on `127.0.0.1:15800`).
 
 ```bash
 # Install
-pip install blender-mcp-server
+pip install blender-llm-mcp
 
 # Run
-blender-mcp-server
+blender-llm-mcp
 
 # Or with uvx (no install needed)
-uvx blender-mcp-server
+uvx blender-llm-mcp
 
 # Custom Blender URL
-blender-mcp-server --blender-url http://127.0.0.1:15800
+blender-llm-mcp --blender-url http://127.0.0.1:15800
 ```
 
 ## Configuration in Claude Desktop
@@ -31,7 +31,7 @@ Add to your `claude_desktop_config.json`:
   "mcpServers": {
     "blender": {
       "command": "uvx",
-      "args": ["blender-mcp-server"]
+      "args": ["blender-llm-mcp"]
     }
   }
 }
@@ -43,7 +43,7 @@ Add to your `claude_desktop_config.json`:
 Claude Desktop / VS Code / any MCP client
     │  MCP stdio protocol
     ▼
-blender-mcp-server
+blender-llm-mcp
     │  HTTP (SSE)
     ▼
 Blender LLM Assistant addon (inside Blender)

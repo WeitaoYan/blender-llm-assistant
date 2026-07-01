@@ -31,11 +31,11 @@ extensions/
 
 ```bash
 # uvx 运行（无需安装）
-uvx blender-mcp-server
+uvx blender-llm-mcp
 
 # 从源码安装
 pip install -e ./mcp-server
-blender-mcp-server
+blender-llm-mcp
 ```
 
 - 依赖：`mcp`、`httpx`
@@ -46,7 +46,7 @@ blender-mcp-server
 MCP 客户端（Claude Desktop / VS Code / Agent Core）
     │  MCP stdio 协议
     ▼
-blender-mcp-server          ← 发布到 PyPI
+blender-llm-mcp          ← 发布到 PyPI
     │  HTTP + SSE
     ▼
 Blender 插件 (FastAPI)      ← 发布到 extensions.blender.org
@@ -63,7 +63,7 @@ blender
 # 在 3D Viewport 侧边栏 → LLM Assistant → Start HTTP Server
 
 # 2. 运行 MCP Server
-uvx blender-mcp-server
+uvx blender-llm-mcp
 ```
 
 ## 发布
