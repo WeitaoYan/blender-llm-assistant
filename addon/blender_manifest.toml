@@ -1,0 +1,14 @@
+schema_version = "1.0.0"
+
+id = "blender-llm-assistant"
+name = "Blender LLM Assistant"
+version = "1.0.0"
+tagline = "Expose Blender modeling tools via HTTP API for AI assistants"
+maintainer = "Yan Weitao <yanweitao@hotmail.com>"
+license = ["SPDX:MIT"]
+website = "https://github.com/your-org/blender-assistant"
+copyright = ["2026 Yan Weitao"]
+
+permissions = ["files"]
+
+platforms = ["windows-x64", "linux-x64", "macos-x64"]

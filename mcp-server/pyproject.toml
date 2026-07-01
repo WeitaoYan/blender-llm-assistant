@@ -1,0 +1,41 @@
+[project]
+name = "blender-mcp-server"
+version = "0.1.0"
+description = "MCP server for Blender 3D — expose Blender modeling tools via Model Context Protocol"
+readme = "README.md"
+authors = [
+    { name = "Yan Weitao", email = "yanweitao@hotmail.com" },
+]
+license = { text = "MIT" }
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+keywords = ["blender", "mcp", "model-context-protocol", "ai", "3d-modeling"]
+dependencies = [
+    "mcp>=1.0.0",
+    "httpx>=0.28.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/blender-assistant"
+Repository = "https://github.com/your-org/blender-assistant"
+Documentation = "https://github.com/your-org/blender-assistant#readme"
+
+[project.scripts]
+blender-mcp-server = "mcp_server.main:run"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
