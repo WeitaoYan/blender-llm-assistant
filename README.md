@@ -12,11 +12,18 @@ extensions/
 
 ### addon
 
-在 Blender 内部运行 FastAPI HTTP 服务器，暴露 50+ 建模工具 API。标准 Blender 插件格式，支持手动安装和 [Blender Extensions 平台](https://extensions.blender.org) 发布。
+在 Blender 内部运行 HTTP 服务器，暴露 55+ 建模工具 API。标准 Blender 插件格式，支持手动安装和 [Blender Extensions 平台](https://extensions.blender.org) 发布。
 
-- 依赖：`fastapi`、`uvicorn`、`websockets`（首次启动自动安装）
+- **兼容性**：已在 Blender **4.5** 上测试通过。其他版本可能需要适配 API 差异（见下方注意事项）
+- 依赖：无（使用 Python 标准库 `http.server`）
 - 端口：`127.0.0.1:15800`
 - 协议：REST + SSE 流式结果
+
+> **版本注意事项：** 如使用非 4.5 版本，请注意以下潜在兼容点：
+> - `bpy.context.mode` 返回格式（4.5 中为 `"EDIT_MESH"` 而非旧版的 `"EDIT"`）
+> - 修改器属性名称（如 `mirror.use_x` → `mirror.use_axis`）
+> - `bpy.ops.render.opengl` 参数签名
+> - `shade_smooth`、`proportional_edit`、`normals` 相关 API 在 4.5 中的调整
 
 ### mcp-server
 

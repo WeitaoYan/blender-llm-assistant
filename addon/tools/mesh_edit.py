@@ -74,7 +74,7 @@ def register_tools(registry):
         parameters={},
     )
     def edit_mode_exit():
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             return {"mode": bpy.context.mode, "note": "Already not in edit mode"}
         bpy.ops.object.mode_set(mode="OBJECT")
         obj = bpy.context.active_object
@@ -123,7 +123,7 @@ def register_tools(registry):
         },
     )
     def mesh_select_all(action: str = "SELECT"):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         action_upper = action.upper()
         if action_upper not in ("SELECT", "DESELECT", "INVERT"):
@@ -143,7 +143,7 @@ def register_tools(registry):
         },
     )
     def mesh_select_by_type(type: str):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         type_map = {"VERT": True, "EDGE": True, "FACE": True}
         type_upper = type.upper()
@@ -162,7 +162,7 @@ def register_tools(registry):
         parameters={},
     )
     def mesh_select_loop():
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.mesh.loop_multi_select(ring=False)
         return {"selected": "edge_loop"}
@@ -173,7 +173,7 @@ def register_tools(registry):
         parameters={},
     )
     def mesh_select_ring():
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.mesh.loop_multi_select(ring=True)
         return {"selected": "edge_ring"}
@@ -184,7 +184,7 @@ def register_tools(registry):
         parameters={},
     )
     def mesh_select_more():
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.mesh.select_more()
         return {"action": "grow_selection"}
@@ -195,7 +195,7 @@ def register_tools(registry):
         parameters={},
     )
     def mesh_select_less():
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.mesh.select_less()
         return {"action": "shrink_selection"}
@@ -222,7 +222,7 @@ def register_tools(registry):
         },
     )
     def mesh_select_by_axis(axis: str, sign: str, threshold: float = 0.0):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
 
         axis_idx = {"X": 0, "Y": 1, "Z": 2}.get(axis.upper())
@@ -291,7 +291,7 @@ def register_tools(registry):
         },
     )
     def mesh_extrude(offset_x: float = 0.0, offset_y: float = 0.0, offset_z: float = 0.0, individual: bool = False):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
 
         if individual:
@@ -334,7 +334,7 @@ def register_tools(registry):
         },
     )
     def mesh_inset(thickness: float = 0.1, depth: float = 0.0, individual: bool = True):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.mesh.inset(
             thickness=thickness,
@@ -372,7 +372,7 @@ def register_tools(registry):
         },
     )
     def mesh_bevel(width: float = 0.1, segments: int = 1, profile: float = 0.5, affect: str = "EDGES"):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
 
         affect_upper = affect.upper()
@@ -410,7 +410,7 @@ def register_tools(registry):
         },
     )
     def mesh_loop_cut(count: int = 1, smoothness: float = 0.0, object: str | None = None):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
 
         obj = bpy.data.objects.get(object) if object else bpy.context.active_object
@@ -452,7 +452,7 @@ def register_tools(registry):
         },
     )
     def mesh_knife(points: list):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
 
         # For 3D knife, convert screen points to region coordinates
@@ -531,7 +531,7 @@ def register_tools(registry):
         clear_outer: bool = False,
         fill: bool = True,
     ):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
 
         obj = bpy.context.active_object
@@ -578,7 +578,7 @@ def register_tools(registry):
         },
     )
     def mesh_merge(method: str = "BY_DISTANCE", distance: float = 0.001):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
 
         method_map = {
@@ -624,7 +624,7 @@ def register_tools(registry):
         },
     )
     def mesh_delete(type: str = "VERT"):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
 
         type_map = {
@@ -647,12 +647,22 @@ def register_tools(registry):
             bpy.ops.mesh.delete(type=type_upper)
 
         obj = bpy.context.active_object
-        bm = bmesh.from_edit_mesh(obj.data)
+        # Gracefully handle case where delete removed all geometry
+        try:
+            bm = bmesh.from_edit_mesh(obj.data)
+            verts = len(bm.verts)
+            edges = len(bm.edges)
+            faces = len(bm.faces)
+        except Exception:
+            verts = 0
+            edges = 0
+            faces = 0
+
         return {
             "deleted_type": type_upper,
-            "remaining_vertices": len(bm.verts),
-            "remaining_edges": len(bm.edges),
-            "remaining_faces": len(bm.faces),
+            "remaining_vertices": verts,
+            "remaining_edges": edges,
+            "remaining_faces": faces,
         }
 
     @registry.register(
@@ -661,10 +671,22 @@ def register_tools(registry):
         parameters={},
     )
     def mesh_fill():
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
-        bpy.ops.mesh.fill()
+
         obj = bpy.context.active_object
+        bm = bmesh.from_edit_mesh(obj.data)
+
+        # If no edges are selected, auto-select boundary edges to fill holes
+        selected_edges = [e for e in bm.edges if e.select]
+        if not selected_edges:
+            for e in bm.edges:
+                if e.is_boundary:
+                    e.select = True
+            bm.select_flush_mode()
+            bmesh.update_edit_mesh(obj.data)
+
+        bpy.ops.mesh.fill()
         bm = bmesh.from_edit_mesh(obj.data)
         return {"filled": True, "faces": len(bm.faces)}
 
@@ -680,7 +702,7 @@ def register_tools(registry):
         },
     )
     def mesh_grid_fill(span: int = 1):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.mesh.fill_grid(span=span)
         return {"grid_fill": True, "span": span}
@@ -702,9 +724,9 @@ def register_tools(registry):
         },
     )
     def mesh_bridge(segments: int = 1, twist: int = 0):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
-        bpy.ops.mesh.bridge_edge_loops(number_cuts=segments, twist=twist)
+        bpy.ops.mesh.bridge_edge_loops(number_cuts=segments)
         return {"bridged": True, "segments": segments, "twist": twist}
 
     @registry.register(
@@ -724,7 +746,7 @@ def register_tools(registry):
         },
     )
     def mesh_subdivide(cuts: int = 1, smoothness: float = 0.0):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.mesh.subdivide(number_cuts=cuts, smoothness=smoothness)
         obj = bpy.context.active_object
@@ -748,7 +770,7 @@ def register_tools(registry):
         },
     )
     def mesh_split(method: str = "SELECTION"):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
 
         if method.upper() == "SELECTION":
@@ -766,7 +788,7 @@ def register_tools(registry):
         parameters={},
     )
     def mesh_separate():
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
 
         old_objects = set(bpy.data.objects.keys())
@@ -822,19 +844,9 @@ def register_tools(registry):
                 "description": "Object name. Uses active object if not provided.",
                 "required": False,
             },
-            "auto_smooth": {
-                "type": "boolean",
-                "description": "Enable auto-smooth with a default angle",
-                "required": False,
-            },
-            "auto_smooth_angle": {
-                "type": "number",
-                "description": "Auto-smooth angle in radians (default 0.5236 = 30 degrees)",
-                "required": False,
-            },
         },
     )
-    def shade_smooth(object: str | None = None, auto_smooth: bool = False, auto_smooth_angle: float = 0.5236):
+    def shade_smooth(object: str | None = None):
         if object:
             obj = _require_mesh_object(object)
         else:
@@ -848,18 +860,12 @@ def register_tools(registry):
 
         bpy.ops.object.shade_smooth()
 
-        if auto_smooth:
-            obj.data.use_auto_smooth = True
-            obj.data.auto_smooth_angle = auto_smooth_angle
-
         if was_edit:
             bpy.ops.object.mode_set(mode="EDIT")
 
         return {
             "object": obj.name,
             "shading": "smooth",
-            "auto_smooth": auto_smooth,
-            "auto_smooth_angle_deg": round(auto_smooth_angle * 57.2958, 1) if auto_smooth else None,
         }
 
     @registry.register(
@@ -904,7 +910,7 @@ def register_tools(registry):
         },
     )
     def mesh_normals_recalculate(direction: str = "OUTSIDE"):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
 
         if direction.upper() == "OUTSIDE":
@@ -922,7 +928,7 @@ def register_tools(registry):
         parameters={},
     )
     def mesh_flip_normals():
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.mesh.flip_normals()
         return {"flipped": True}
@@ -1143,7 +1149,7 @@ def register_tools(registry):
         if vg is None:
             raise ValueError(f"Vertex group '{group_name}' not found on '{object}'")
 
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode to assign vertices. Use edit_mode_enter first.")
 
         bm = bmesh.from_edit_mesh(obj.data)
@@ -1177,7 +1183,7 @@ def register_tools(registry):
         if vg is None:
             raise ValueError(f"Vertex group '{group_name}' not found on '{object}'")
 
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
 
         bpy.ops.object.vertex_group_remove_from()
@@ -1444,15 +1450,22 @@ def register_tools(registry):
     ):
         import math
 
-        if object_a and object_b and object_c:
+        if object_a and object_b:
             obj_a = bpy.data.objects.get(object_a)
             obj_b = bpy.data.objects.get(object_b)
-            obj_c = bpy.data.objects.get(object_c)
-            if not all([obj_a, obj_b, obj_c]):
+            if not obj_a or not obj_b:
                 raise ValueError("One or more objects not found")
-            va = mathutils.Vector(obj_a.location) - mathutils.Vector(obj_b.location)
-            vc = mathutils.Vector(obj_c.location) - mathutils.Vector(obj_b.location)
-            angle = va.angle(vc)
+            if object_c:
+                obj_c = bpy.data.objects.get(object_c)
+                if not obj_c:
+                    raise ValueError("One or more objects not found")
+                va = mathutils.Vector(obj_a.location) - mathutils.Vector(obj_b.location)
+                vc = mathutils.Vector(obj_c.location) - mathutils.Vector(obj_b.location)
+                angle = va.angle(vc)
+            else:
+                va = mathutils.Vector(obj_a.location)
+                vc = mathutils.Vector(obj_b.location)
+                angle = va.angle(vc)
             return {"angle_rad": round(angle, 6), "angle_deg": round(math.degrees(angle), 2)}
 
         # Edit mode: use first 3 selected vertices
@@ -1466,7 +1479,7 @@ def register_tools(registry):
                 angle = va.angle(vc)
                 return {"angle_rad": round(angle, 6), "angle_deg": round(math.degrees(angle), 2)}
 
-        raise ValueError("Provide three object names, or select three vertices in edit mode.")
+        raise ValueError("Provide two or three object names, or select three vertices in edit mode.")
 
     @registry.register(
         name="get_mesh_stats",
@@ -1494,7 +1507,7 @@ def register_tools(registry):
         tris = sum(len(p.vertices) - 2 for p in mesh.polygons)
 
         # Bounding box
-        bbox_local = [list(v.co) for v in obj.bound_box]
+        bbox_local = [list(v) for v in obj.bound_box]
         bbox_world = [list(obj.matrix_world @ mathutils.Vector(v)) for v in obj.bound_box]
 
         # Count n-gons
@@ -1563,7 +1576,7 @@ def register_tools(registry):
         orient_axis: str = "Z",
     ):
         obj = _require_mesh_object(object)
-        if bpy.context.mode != "EDIT" or bpy.context.active_object != obj:
+        if not bpy.context.mode.startswith("EDIT") or bpy.context.active_object != obj:
             raise ValueError("Must be in edit mode on the specified object.")
 
         if not value:
@@ -1612,7 +1625,7 @@ def register_tools(registry):
         },
     )
     def mesh_vert_slide(value: float = 0.0):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.transform.vert_slide(value=value)
         return {"slide_value": value}
@@ -1629,7 +1642,7 @@ def register_tools(registry):
         },
     )
     def mesh_edge_slide(value: float = 0.0):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.transform.edge_slide(value=value)
         return {"slide_value": value}
@@ -1662,12 +1675,7 @@ def register_tools(registry):
     )
     def proportional_edit(enable: bool, falloff: str = "SMOOTH", radius: float = 1.0, connected: bool = False):
         ts = bpy.context.scene.tool_settings
-
-        if bpy.context.mode == "EDIT":
-            ts.use_proportional_edit = enable
-        else:
-            ts.use_proportional_edit_object = enable
-
+        ts.use_proportional_edit = enable
         ts.proportional_edit_falloff = falloff.upper()
         ts.proportional_size = radius
         ts.use_proportional_connected = connected
@@ -1695,7 +1703,7 @@ def register_tools(registry):
         },
     )
     def mesh_crease(weight: float = 1.0):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         weight = max(0.0, min(1.0, weight))
         obj = bpy.context.active_object
@@ -1718,7 +1726,7 @@ def register_tools(registry):
         },
     )
     def mesh_mark_sharp(clear: bool = False):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.mesh.mark_sharp(clear=clear)
         return {"marked_sharp": not clear}
@@ -1735,7 +1743,7 @@ def register_tools(registry):
         },
     )
     def mesh_mark_seam(clear: bool = False):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.mesh.mark_seam(clear=clear)
         return {"marked_seam": not clear}
@@ -1756,7 +1764,7 @@ def register_tools(registry):
         },
     )
     def mesh_symmetrize(direction: str = "POSITIVE_X"):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.mesh.symmetrize(direction=direction.upper())
         obj = bpy.context.active_object
@@ -1777,7 +1785,7 @@ def register_tools(registry):
         parameters={},
     )
     def mesh_poke():
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.mesh.poke()
         obj = bpy.context.active_object
@@ -1796,7 +1804,7 @@ def register_tools(registry):
         },
     )
     def mesh_triangulate(quad_method: str = "BEAUTY"):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.mesh.quads_convert_to_tris(quad_method=quad_method.upper())
         obj = bpy.context.active_object
@@ -1825,7 +1833,7 @@ def register_tools(registry):
         },
     )
     def mesh_limited_dissolve(angle_limit: float = 0.1745, dissolve_type: str = "ALL"):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         type_upper = dissolve_type.upper()
         if type_upper == "ALL":
@@ -1852,7 +1860,7 @@ def register_tools(registry):
         },
     )
     def mesh_delete_loose(type: str = "ALL"):
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         type_upper = type.upper()
         if type_upper == "ALL":
@@ -1883,7 +1891,7 @@ def register_tools(registry):
         parameters={},
     )
     def mesh_set_normals_from_faces():
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.mesh.set_normals_from_faces()
         return {"normals_set_from_faces": True}
@@ -1894,7 +1902,7 @@ def register_tools(registry):
         parameters={},
     )
     def mesh_normals_smooth():
-        if bpy.context.mode != "EDIT":
+        if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
-        bpy.ops.mesh.normals_tools(mode="SMOOTH")
+        bpy.ops.mesh.faces_shade_smooth()
         return {"normals_smoothed": True}

@@ -13,6 +13,19 @@ OBJECT_TYPES = {
 }
 
 
+def _ensure_object_mode():
+    """Switch to object mode if not already."""
+    if bpy.context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def _deselect_all():
+    """Deselect all objects without requiring a VIEW_3D context."""
+    for obj in bpy.data.objects:
+        obj.select_set(False)
+    bpy.context.view_layer.objects.active = None
+
+
 def register_tools(registry):
 
     @registry.register(
@@ -61,46 +74,23 @@ def register_tools(registry):
         if scale is None:
             scale = [1, 1, 1]
 
-        bpy.ops.object.select_all(action="DESELECT")
+        _deselect_all()
 
         if type == "cube":
-            bpy.ops.mesh.primitive_cube_add(
-                location=location,
-                rotation=rotation,
-                scale=scale,
-            )
+            bpy.ops.mesh.primitive_cube_add(location=location, rotation=rotation)
         elif type in ("sphere", "uv_sphere"):
-            bpy.ops.mesh.primitive_uv_sphere_add(
-                location=location,
-                rotation=rotation,
-                scale=scale,
-            )
+            bpy.ops.mesh.primitive_uv_sphere_add(location=location, rotation=rotation)
         elif type == "cylinder":
-            bpy.ops.mesh.primitive_cylinder_add(
-                location=location,
-                rotation=rotation,
-                scale=scale,
-            )
+            bpy.ops.mesh.primitive_cylinder_add(location=location, rotation=rotation)
         elif type == "cone":
-            bpy.ops.mesh.primitive_cone_add(
-                location=location,
-                rotation=rotation,
-                scale=scale,
-            )
+            bpy.ops.mesh.primitive_cone_add(location=location, rotation=rotation)
         elif type == "torus":
-            bpy.ops.mesh.primitive_torus_add(
-                location=location,
-                rotation=rotation,
-                scale=scale,
-            )
+            bpy.ops.mesh.primitive_torus_add(location=location, rotation=rotation)
         elif type == "ico_sphere":
-            bpy.ops.mesh.primitive_ico_sphere_add(
-                location=location,
-                rotation=rotation,
-                scale=scale,
-            )
+            bpy.ops.mesh.primitive_ico_sphere_add(location=location, rotation=rotation)
 
         obj = bpy.context.active_object
+        obj.scale = tuple(scale)
         if name:
             obj.name = name
 
@@ -127,7 +117,7 @@ def register_tools(registry):
         obj = bpy.data.objects.get(name)
         if obj is None:
             raise ValueError(f"Object '{name}' not found")
-        bpy.ops.object.select_all(action="DESELECT")
+        _deselect_all()
         obj.select_set(True)
         bpy.context.view_layer.objects.active = obj
         return {"selected": name}
@@ -147,8 +137,9 @@ def register_tools(registry):
         obj = bpy.data.objects.get(name)
         if obj is None:
             raise ValueError(f"Object '{name}' not found")
-        bpy.ops.object.select_all(action="DESELECT")
+        _deselect_all()
         obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj
         bpy.ops.object.delete()
         return {"deleted": name}
 
@@ -224,7 +215,8 @@ def register_tools(registry):
         if obj is None:
             raise ValueError(f"Object '{name}' not found")
 
-        bpy.ops.object.select_all(action="DESELECT")
+        _ensure_object_mode()
+        _deselect_all()
         obj.select_set(True)
         bpy.context.view_layer.objects.active = obj
         bpy.ops.object.duplicate()
@@ -272,9 +264,9 @@ def register_tools(registry):
             mod.levels = params.get("levels", 1)
             mod.render_levels = params.get("render_levels", 2)
         elif type == "mirror":
-            mod.use_x = params.get("use_x", True)
-            mod.use_y = params.get("use_y", False)
-            mod.use_z = params.get("use_z", False)
+            mod.use_axis[0] = params.get("use_x", True)
+            mod.use_axis[1] = params.get("use_y", False)
+            mod.use_axis[2] = params.get("use_z", False)
         elif type == "bevel":
             mod.width = params.get("width", 0.05)
             mod.segments = params.get("segments", 1)
@@ -319,7 +311,7 @@ def register_tools(registry):
         if obj_b is None:
             raise ValueError(f"Object '{object_b}' not found")
 
-        bpy.ops.object.select_all(action="DESELECT")
+        _deselect_all()
         obj_a.select_set(True)
         bpy.context.view_layer.objects.active = obj_a
 

@@ -1,26 +1,18 @@
-import asyncio
 import json
 import logging
 import threading
 import time
 import uuid
-from contextlib import asynccontextmanager
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 
-import bpy # type: ignore
-import uvicorn
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+import bpy
 
 from .tools import tool_registry
 
 logger = logging.getLogger(__name__)
 
-_server = None
-_loop = None
-_thread = None
-_app = None
+_server_instance = None
 
 # --- SSE Event Store ---
 _event_store: dict[str, list[dict]] = {}
@@ -34,7 +26,6 @@ def _new_task_id() -> str:
 
 
 def _init_task(task_id: str):
-    logger.debug(f"Init SSE task: {task_id}")
     with _store_lock:
         _event_store[task_id] = []
         _event_conditions[task_id] = threading.Condition()
@@ -80,24 +71,45 @@ def _cancel_cleanup(task_id: str):
             timer.cancel()
 
 
-def _run_on_main_thread_sync(func, *args, timeout: float = 60.0, **kwargs):
-    """Execute a function on Blender's main thread and return its result.
+def _view3d_override():
+    """Build a temp_override dict for the first VIEW_3D area found."""
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == "VIEW_3D":
+                region = None
+                for r in area.regions:
+                    if r.type == "WINDOW":
+                        region = r
+                        break
+                if region is None and area.regions:
+                    region = area.regions[-1]
+                return {
+                    "window": window,
+                    "screen": window.screen,
+                    "area": area,
+                    "region": region,
+                }
+    return None
 
-    Uses bpy.app.timers.register to schedule the call and a threading.Event
-    to wait for completion. Returns (result, None) on success or (None, error)
-    on failure/timeout.
-    """
+
+def _run_on_main_thread_sync(func, *args, timeout: float = 60.0, **kwargs):
+    """Execute a function on Blender's main thread and return its result."""
     result_container = {}
     done_event = threading.Event()
 
     def _wrapper():
         try:
-            result_container["result"] = func(*args, **kwargs)
+            ctx = _view3d_override()
+            if ctx:
+                with bpy.context.temp_override(**ctx):
+                    result_container["result"] = func(*args, **kwargs)
+            else:
+                result_container["result"] = func(*args, **kwargs)
         except Exception as e:
             result_container["error"] = e
         finally:
             done_event.set()
-        return None  # one-shot timer: return None to unregister
+        return None
 
     bpy.app.timers.register(_wrapper, first_interval=0.0)
     if not done_event.wait(timeout=timeout):
@@ -109,7 +121,7 @@ def _run_on_main_thread_sync(func, *args, timeout: float = 60.0, **kwargs):
 
 
 def _run_tool(task_id: str, tool_name: str, params: dict):
-    logger.info(f"Tool call (dispatching to main thread): {tool_name}({json.dumps(params, default=str)})")
+    logger.info(f"Tool call: {tool_name}({json.dumps(params, default=str)})")
     start = time.time()
     _push_event(task_id, "running", {"tool": tool_name})
     try:
@@ -117,218 +129,215 @@ def _run_tool(task_id: str, tool_name: str, params: dict):
         if tool_func is None:
             raise ValueError(f"Tool '{tool_name}' not found")
 
-        # Execute the tool on Blender's main thread
         result, error = _run_on_main_thread_sync(tool_func, **params)
         if error is not None:
             raise error
 
-        elapsed = time.time() - start
-        logger.info(f"Tool {tool_name} completed in {elapsed:.2f}s")
+        logger.info(f"Tool {tool_name} completed in {time.time() - start:.2f}s")
         _push_event(task_id, "success", {"result": result})
     except Exception as e:
-        elapsed = time.time() - start
-        logger.exception(f"Tool {tool_name} failed after {elapsed:.2f}s: {e}")
+        logger.exception(f"Tool {tool_name} failed after {time.time() - start:.2f}s: {e}")
         _push_event(task_id, "error", {"error": str(e)})
     finally:
         _schedule_cleanup(task_id)
 
 
-def _wait_on_cond(cond: threading.Condition, timeout: float):
-    with cond:
-        cond.wait(timeout=timeout)
+def _json_response(handler, data: dict, status: int = 200):
+    body = json.dumps(data, default=str).encode()
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Access-Control-Allow-Origin", "*")
+    handler.end_headers()
+    handler.wfile.write(body)
 
 
-async def _event_generator(task_id: str, request: Request):
-    index = 0
-    try:
-        while True:
-            if await request.is_disconnected():
-                break
-            events = _get_events_since(task_id, index)
-            for ev in events:
-                index += 1
-                yield f"event: {ev['event']}\ndata: {json.dumps(ev['data'])}\n\n"
-                if ev['event'] in ("success", "error"):
-                    return
-            cond = _event_conditions.get(task_id)
-            if cond is None:
-                break
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, _wait_on_cond, cond, 3.0)
-    finally:
-        _cancel_cleanup(task_id)
-        _cleanup_task(task_id)
+def _read_json_body(handler) -> dict:
+    length = int(handler.headers.get("Content-Length", 0))
+    if length > 0:
+        return json.loads(handler.rfile.read(length).decode())
+    return {}
 
 
-class ToolCallRequest(BaseModel):
-    tool: str
-    params: dict = {}
+class _BlenderHTTPRequestHandler(BaseHTTPRequestHandler):
 
+    def log_message(self, format, *args):
+        logger.debug(f"HTTP {args[0]} {args[1]} {args[2]}")
 
-class ToolCallResponse(BaseModel):
-    success: bool
-    result: dict | None = None
-    error: str | None = None
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.end_headers()
 
+    def do_GET(self):
+        try:
+            self._route_get()
+        except Exception as e:
+            logger.exception(f"GET {self.path} failed")
+            _json_response(self, {"detail": str(e)}, 500)
 
-def create_app() -> FastAPI:
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        logger.info("Blender HTTP Server started")
-        yield
-        logger.info("Blender HTTP Server stopped")
+    def _route_get(self):
+        if self.path == "/health":
+            return _json_response(self, {"status": "ok"})
 
-    app = FastAPI(title="Blender LLM Assistant", version="0.1.0", lifespan=lifespan)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    @app.get("/api/tools/list")
-    def list_tools():
-        tools = list(tool_registry.get_all().keys())
-        logger.debug(f"Listing {len(tools)} tools")
-        return {
-            "tools": [
-                {
-                    "name": name,
-                    "description": info.get("description", ""),
-                    "parameters": info.get("parameters", {}),
-                }
-                for name, info in tool_registry.get_all().items()
+        if self.path == "/api/tools/list":
+            tools = [
+                {"name": n, "description": i.get("description", ""), "parameters": i.get("parameters", {})}
+                for n, i in tool_registry.get_all().items()
             ]
-        }
+            return _json_response(self, {"tools": tools})
 
-    @app.post("/api/tools/call", status_code=202)
-    async def call_tool(req: ToolCallRequest):
-        task_id = _new_task_id()
-        _init_task(task_id)
-        logger.info(f"Queue tool call: {req.tool} (task={task_id})")
-        _push_event(task_id, "queued", {"task_id": task_id, "tool": req.tool})
-        thread = threading.Thread(
-            target=_run_tool,
-            args=(task_id, req.tool, req.params),
-            daemon=True,
-        )
-        thread.start()
-        return {"task_id": task_id, "status": "queued"}
+        if self.path.startswith("/api/sse/"):
+            task_id = self.path[len("/api/sse/"):]
+            return self._handle_sse(task_id)
 
-    @app.get("/api/sse/{task_id}")
-    async def sse_events(task_id: str, request: Request):
-        if task_id not in _event_store:
-            raise HTTPException(status_code=404, detail="Task not found")
-        return StreamingResponse(
-            _event_generator(task_id, request),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
+        if self.path == "/api/scene/info":
+            def _get_info():
+                info = {
+                    "scene_name": bpy.context.scene.name,
+                    "objects": [],
+                    "frame": bpy.context.scene.frame_current,
+                    "render_engine": bpy.context.scene.render.engine,
+                }
+                for obj in bpy.data.objects:
+                    info["objects"].append({
+                        "name": obj.name, "type": obj.type,
+                        "location": list(obj.location), "rotation": list(obj.rotation_euler),
+                        "scale": list(obj.scale), "visible": obj.visible_get(),
+                    })
+                return info
+            result, error = _run_on_main_thread_sync(_get_info)
+            if error:
+                return _json_response(self, {"detail": str(error)}, 500)
+            return _json_response(self, result)
 
-    @app.get("/api/scene/info")
-    def scene_info():
-        def _get_scene_info():
-            info = {
-                "objects": [],
-                "frame": bpy.context.scene.frame_current,
-                "render_engine": bpy.context.scene.render.engine,
-            }
-            for obj in bpy.data.objects:
-                info["objects"].append({
-                    "name": obj.name,
-                    "type": obj.type,
-                    "location": list(obj.location),
-                    "rotation": list(obj.rotation_euler),
-                    "scale": list(obj.scale),
-                    "visible": obj.visible_get(),
-                })
-            return info
+        _json_response(self, {"detail": "Not Found"}, 404)
 
-        result, error = _run_on_main_thread_sync(_get_scene_info)
-        if error:
-            raise HTTPException(status_code=500, detail=str(error))
-        return result
+    def do_POST(self):
+        try:
+            self._route_post()
+        except Exception as e:
+            logger.exception(f"POST {self.path} failed")
+            _json_response(self, {"detail": str(e)}, 500)
 
-    @app.post("/api/scene/screenshot")
-    def take_screenshot():
-        import base64
-        import tempfile
-        import os
+    def _route_post(self):
+        if self.path == "/api/tools/call":
+            data = _read_json_body(self)
+            task_id = _new_task_id()
+            _init_task(task_id)
+            _push_event(task_id, "queued", {"task_id": task_id, "tool": data.get("tool", "")})
+            thread = threading.Thread(
+                target=_run_tool,
+                args=(task_id, data.get("tool"), data.get("params", {})),
+                daemon=True,
+            )
+            thread.start()
+            return _json_response(self, {"task_id": task_id, "status": "queued"}, 202)
 
-        def _take_screenshot():
-            scene = bpy.context.scene
-            old_format = scene.render.image_settings.file_format
-            scene.render.image_settings.file_format = "PNG"
+        if self.path == "/api/scene/screenshot":
+            import base64
+            import os
+            import tempfile
 
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                tmp_path = tmp.name
-
-            try:
-                bpy.ops.render.opengl(write_still=True, view_context=True)
-                import bpy.path
-                actual_path = bpy.context.render.frame_path()
-                if os.path.exists(actual_path):
-                    import shutil
-                    shutil.copy(actual_path, tmp_path)
-                else:
+            def _take():
+                scene = bpy.context.scene
+                old_format = scene.render.image_settings.file_format
+                scene.render.image_settings.file_format = "PNG"
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                    tmp_path = tmp.name
+                try:
                     scene.render.filepath = tmp_path
-                    bpy.ops.render.opengl(write_still=True, view_context=True)
+                    bpy.ops.render.opengl(write_still=True)
+                    with open(tmp_path, "rb") as f:
+                        data = base64.b64encode(f.read()).decode()
+                    return {"image": data, "format": "png"}
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+                    scene.render.image_settings.file_format = old_format
 
-                with open(tmp_path, "rb") as f:
-                    data = base64.b64encode(f.read()).decode()
-                return {"image": data, "format": "png"}
-            finally:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-                scene.render.image_settings.file_format = old_format
+            result, error = _run_on_main_thread_sync(_take)
+            if error:
+                return _json_response(self, {"detail": str(error)}, 500)
+            return _json_response(self, result)
 
-        result, error = _run_on_main_thread_sync(_take_screenshot)
-        if error:
-            raise HTTPException(status_code=500, detail=str(error))
-        return result
+        _json_response(self, {"detail": "Not Found"}, 404)
 
-    @app.get("/health")
-    def health():
-        return {"status": "ok"}
+    def _handle_sse(self, task_id: str):
+        """Block until tool completes, then write all SSE events at once."""
+        if task_id not in _event_store:
+            return _json_response(self, {"detail": "Task not found"}, 404)
 
-    return app
+        index = 0
+        lines = []
+        try:
+            while True:
+                events = _get_events_since(task_id, index)
+                for ev in events:
+                    index += 1
+                    lines.append(
+                        f"event: {ev['event']}\n"
+                        f"data: {json.dumps(ev['data'], default=str)}\n\n"
+                    )
+                    if ev['event'] in ("success", "error"):
+                        _cancel_cleanup(task_id)
+                        _cleanup_task(task_id)
+                        self._write_sse_response(lines)
+                        return
+
+                cond = _event_conditions.get(task_id)
+                if cond is None:
+                    break
+                with cond:
+                    cond.wait(timeout=3.0)
+        finally:
+            _cancel_cleanup(task_id)
+            _cleanup_task(task_id)
+
+        if lines:
+            self._write_sse_response(lines)
+        else:
+            _json_response(self, {"detail": "No events"}, 204)
+
+    def _write_sse_response(self, lines: list[str]):
+        body = "".join(lines).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+
+class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
 
 
 def start_server(port: int = 15800):
-    global _app, _server, _loop, _thread
+    global _server_instance
 
     logger.info(f"Starting Blender HTTP server on port {port}")
-    _app = create_app()
 
-    config = uvicorn.Config(
-        app=_app,
-        host="127.0.0.1",
-        port=port,
-        log_level="info",
-        loop="asyncio",
-    )
-    _server = uvicorn.Server(config)
+    _server_instance = _ThreadingHTTPServer(("127.0.0.1", port), _BlenderHTTPRequestHandler)
 
-    _loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(_loop)
     try:
-        _loop.run_until_complete(_server.serve())
+        _server_instance.serve_forever()
     except Exception as e:
-        logger.exception(f"Blender HTTP server crashed: {e}")
+        logger.warning(f"Blender HTTP server stopped: {e}")
     finally:
-        logger.info("Blender HTTP server stopped")
+        _server_instance = None
 
 
 def stop_server():
-    global _server, _loop
+    global _server_instance
     logger.info("Stopping Blender HTTP server...")
-    if _server:
-        _server.should_exit = True
-        _server = None
-    if _loop:
-        _loop.call_soon_threadsafe(_loop.stop)
-        _loop = None
+    if _server_instance:
+        _server_instance.shutdown()
+        _server_instance = None

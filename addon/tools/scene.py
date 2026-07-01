@@ -15,7 +15,6 @@ _SAFE_MODULES = {
 
 # Block dangerous builtins in the sandbox
 _FORBIDDEN_BUILTINS = {
-    "__import__",
     "compile",
     "eval",
     "exec",
@@ -23,6 +22,15 @@ _FORBIDDEN_BUILTINS = {
     "input",
     "breakpoint",
 }
+
+
+def _safe_import(name, *args, **kwargs):
+    """Whitelist-based import: only allows modules in _SAFE_MODULES."""
+    if name in _SAFE_MODULES:
+        import builtins as _b
+        return _b.__import__(name, *args, **kwargs)
+    raise ImportError(f"Import of '{name}' is not allowed in sandbox")
+
 
 def _safe_builtins() -> dict:
     """Return a copy of builtins with dangerous functions removed."""
@@ -32,6 +40,7 @@ def _safe_builtins() -> dict:
             continue
         obj = getattr(builtins, name)
         safe[name] = obj
+    safe["__import__"] = _safe_import
     return safe
 
 
