@@ -1,4 +1,4 @@
-from . import object_ops, material, scene, mesh_edit
+from . import object_ops, material, scene, mesh_edit, curve_ops, uv_ops
 
 
 class ToolRegistry:
@@ -33,8 +33,9 @@ class ToolRegistry:
 
 tool_registry = ToolRegistry()
 
-
 object_ops.register_tools(tool_registry)
 material.register_tools(tool_registry)
 scene.register_tools(tool_registry)
 mesh_edit.register_tools(tool_registry)
+curve_ops.register_tools(tool_registry)
+uv_ops.register_tools(tool_registry)

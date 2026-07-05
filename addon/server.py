@@ -13,6 +13,7 @@ from .tools import tool_registry
 logger = logging.getLogger(__name__)
 
 _server_instance = None
+_SERVER_SECRET: str | None = None
 
 # --- SSE Event Store ---
 _event_store: dict[str, list[dict]] = {}
@@ -93,7 +94,12 @@ def _view3d_override():
 
 
 def _run_on_main_thread_sync(func, *args, timeout: float = 60.0, **kwargs):
-    """Execute a function on Blender's main thread and return its result."""
+    """Execute a function on Blender's main thread and return its result.
+
+    Uses bpy.app.timers.register to schedule the call and a threading.Event
+    to wait for completion. Returns (result, None) on success or (None, error)
+    on failure/timeout.
+    """
     result_container = {}
     done_event = threading.Event()
 
@@ -109,7 +115,7 @@ def _run_on_main_thread_sync(func, *args, timeout: float = 60.0, **kwargs):
             result_container["error"] = e
         finally:
             done_event.set()
-        return None
+        return None  # one-shot timer: return None to unregister
 
     bpy.app.timers.register(_wrapper, first_interval=0.0)
     if not done_event.wait(timeout=timeout):
@@ -121,7 +127,6 @@ def _run_on_main_thread_sync(func, *args, timeout: float = 60.0, **kwargs):
 
 
 def _run_tool(task_id: str, tool_name: str, params: dict):
-    logger.info(f"Tool call: {tool_name}({json.dumps(params, default=str)})")
     start = time.time()
     _push_event(task_id, "running", {"tool": tool_name})
     try:
@@ -133,23 +138,41 @@ def _run_tool(task_id: str, tool_name: str, params: dict):
         if error is not None:
             raise error
 
-        logger.info(f"Tool {tool_name} completed in {time.time() - start:.2f}s")
         _push_event(task_id, "success", {"result": result})
     except Exception as e:
-        logger.exception(f"Tool {tool_name} failed after {time.time() - start:.2f}s: {e}")
+        # 避免 logger.exception 导致线程安全问题
         _push_event(task_id, "error", {"error": str(e)})
     finally:
         _schedule_cleanup(task_id)
 
 
+def _check_auth(handler) -> bool:
+    auth = handler.headers.get("Authorization", "")
+    if auth == f"Bearer {_SERVER_SECRET}":
+        return True
+    _json_response(handler, {"detail": "Unauthorized"}, 401)
+    return False
+
+
 def _json_response(handler, data: dict, status: int = 200):
-    body = json.dumps(data, default=str).encode()
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json")
-    handler.send_header("Content-Length", str(len(body)))
-    handler.send_header("Access-Control-Allow-Origin", "*")
-    handler.end_headers()
-    handler.wfile.write(body)
+    """发送 JSON 响应，线程安全版本"""
+    try:
+        body = json.dumps(data, default=str).encode()
+        # 检查连接是否仍然有效
+        if handler.wfile.closed:
+            return
+        handler.send_response(status)
+        handler.send_header("Content-Type", "application/json")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.send_header("Access-Control-Allow-Origin", "*")
+        handler.end_headers()
+        handler.wfile.write(body)
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        # 客户端已断开连接，忽略
+        pass
+    except Exception:
+        # 其他异常也忽略，避免崩溃
+        pass
 
 
 def _read_json_body(handler) -> dict:
@@ -160,22 +183,29 @@ def _read_json_body(handler) -> dict:
 
 
 class _BlenderHTTPRequestHandler(BaseHTTPRequestHandler):
-
+    # 禁用默认的日志格式化，避免线程安全问题
     def log_message(self, format, *args):
-        logger.debug(f"HTTP {args[0]} {args[1]} {args[2]}")
+        # 不使用 logger，直接使用 print 避免 GIL 竞争
+        pass
+
+    def log_request(self, code='-', size='-'):
+        # 覆盖 log_request 避免调用 log_message
+        pass
 
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
         self.end_headers()
 
     def do_GET(self):
         try:
+            if self.path != "/health" and not _check_auth(self):
+                return
             self._route_get()
         except Exception as e:
-            logger.exception(f"GET {self.path} failed")
+            # 避免 logger.exception 导致线程安全问题
             _json_response(self, {"detail": str(e)}, 500)
 
     def _route_get(self):
@@ -217,9 +247,11 @@ class _BlenderHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            if not _check_auth(self):
+                return
             self._route_post()
         except Exception as e:
-            logger.exception(f"POST {self.path} failed")
+            # 避免 logger.exception 导致线程安全问题
             _json_response(self, {"detail": str(e)}, 500)
 
     def _route_post(self):
@@ -320,9 +352,10 @@ class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 
-def start_server(port: int = 15800):
-    global _server_instance
+def start_server(port: int = 15800, secret: str | None = None):
+    global _server_instance, _SERVER_SECRET
 
+    _SERVER_SECRET = secret or ""
     logger.info(f"Starting Blender HTTP server on port {port}")
 
     _server_instance = _ThreadingHTTPServer(("127.0.0.1", port), _BlenderHTTPRequestHandler)
@@ -339,5 +372,8 @@ def stop_server():
     global _server_instance
     logger.info("Stopping Blender HTTP server...")
     if _server_instance:
-        _server_instance.shutdown()
+        instance = _server_instance
         _server_instance = None
+        t = threading.Thread(target=instance.shutdown, daemon=True)
+        t.start()
+        t.join(timeout=3.0)

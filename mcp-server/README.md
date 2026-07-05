@@ -8,21 +8,29 @@ Connect AI assistants to Blender via [Model Context Protocol](https://modelconte
 
 Requires the [Blender LLM Assistant](https://github.com/WeitaoYan/blender-llm-assistant) addon running in Blender (HTTP API on `127.0.0.1:15800`).
 
+The Blender addon uses **Bearer Token authentication**. After starting the server in Blender, copy the token from the panel and pass it to the MCP server.
+
 ```bash
 # Install
 pip install blender-llm-mcp
 
-# Run
-blender-llm-mcp
+# Run with token
+blender-llm-mcp --blender-token <token-from-blender-panel>
 
 # Or with uvx (no install needed)
-uvx blender-llm-mcp
+uvx blender-llm-mcp --blender-token <token-from-blender-panel>
 
 # Custom Blender URL
-blender-llm-mcp --blender-url http://127.0.0.1:15800
+blender-llm-mcp --blender-url http://127.0.0.1:15800 --blender-token <token>
 ```
 
 ## Configuration in Claude Desktop
+
+First set the token as an environment variable, then reference it in the config:
+
+```bash
+export BLENDER_TOKEN="<token-from-blender-panel>"
+```
 
 Add to your `claude_desktop_config.json`:
 
@@ -31,7 +39,7 @@ Add to your `claude_desktop_config.json`:
   "mcpServers": {
     "blender": {
       "command": "uvx",
-      "args": ["blender-llm-mcp"]
+      "args": ["blender-llm-mcp", "--blender-token", "${BLENDER_TOKEN}"]
     }
   }
 }

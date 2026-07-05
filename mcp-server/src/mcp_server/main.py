@@ -38,8 +38,8 @@ logger.info(f"Logging to {log_file}")
 
 
 class BlenderMCPServer:
-    def __init__(self, blender_url: str = "http://127.0.0.1:15800"):
-        self.blender = BlenderClient(blender_url)
+    def __init__(self, blender_url: str = "http://127.0.0.1:15800", blender_token: str | None = None):
+        self.blender = BlenderClient(blender_url, token=blender_token)
         self.tool_manager = ToolManager(self.blender)
         self.server = Server("blender-assistant")
 
@@ -75,9 +75,10 @@ async def main():
 
     parser = argparse.ArgumentParser(description="Blender MCP Server")
     parser.add_argument("--blender-url", default="http://127.0.0.1:15800")
+    parser.add_argument("--blender-token", default=None, help="Bearer token for Blender HTTP API auth")
     args = parser.parse_args()
 
-    server = BlenderMCPServer(blender_url=args.blender_url)
+    server = BlenderMCPServer(blender_url=args.blender_url, blender_token=args.blender_token)
 
     if not await server.blender.health_check():
         logger.warning("Blender HTTP server is not reachable. Tools will be empty until connection.")

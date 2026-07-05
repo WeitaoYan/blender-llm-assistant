@@ -21,8 +21,11 @@ from typing import Any
 pytestmark = pytest.mark.blender
 
 BLENDER_URL = "http://127.0.0.1:15800"
+AUTH_TOKEN = "f7b6f4b3602449f8a22b02de240a17d9"
 TOOL_TIMEOUT = 60.0
-_INTERVAL = 0.5  # seconds between tool calls to avoid overwhelming Blender
+_INTERVAL = 1  # seconds between tool calls to avoid overwhelming Blender
+
+AUTH_HEADERS = {"Authorization": f"Bearer {AUTH_TOKEN}"}
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
@@ -76,7 +79,7 @@ def _parse_sse(text: str) -> dict:
 
 def tool_names() -> list[str]:
     """Fetch tool list from server."""
-    resp = httpx.get(f"{BLENDER_URL}/api/tools/list", timeout=5)
+    resp = httpx.get(f"{BLENDER_URL}/api/tools/list", timeout=5, headers=AUTH_HEADERS)
     resp.raise_for_status()
     return [t["name"] for t in resp.json()["tools"]]
 
@@ -93,7 +96,7 @@ def run_python(client: httpx.Client, code: str) -> Any:
 @pytest.fixture(scope="module")
 def client():
     limits = httpx.Limits(max_keepalive_connections=0, max_connections=10)
-    with httpx.Client(base_url=BLENDER_URL, timeout=TOOL_TIMEOUT, limits=limits) as c:
+    with httpx.Client(base_url=BLENDER_URL, timeout=TOOL_TIMEOUT, limits=limits, headers=AUTH_HEADERS) as c:
         yield c
 
 
@@ -101,7 +104,7 @@ _cube_counter = 0
 
 @pytest.fixture(scope="module")
 def test_cube(client) -> str:
-    """Create a fresh named test cube unique per module run."""
+    """Create a fresh named test cube, shared across all tests."""
     global _cube_counter
     _cube_counter += 1
     name = f"TestCube_{_cube_counter}"
@@ -152,7 +155,10 @@ class TestHealth:
         # Spot-check core tools
         for required in ["create_object", "select_object", "delete_object",
                          "set_material", "get_scene_info", "execute_python",
-                         "edit_mode_enter", "mesh_extrude", "mesh_merge"]:
+                         "edit_mode_enter", "mesh_extrude", "mesh_merge",
+                         "create_curve", "uv_unwrap", "create_light",
+                         "create_camera", "align_objects", "select_similar",
+                         "set_viewport", "import_file", "export_file"]:
             assert required in names, f"Missing required tool: {required}"
 
     def test_scene_info(self, client):
@@ -249,7 +255,7 @@ class TestObjectOps:
 class TestMaterial:
     def test_set_material(self, client, test_cube):
         result = call_tool(client, "set_material", {
-            "object": test_cube,
+            "target": test_cube,
             "color": [0.8, 0.1, 0.1, 1.0],
             "metallic": 0.5,
             "roughness": 0.3,
@@ -260,14 +266,14 @@ class TestMaterial:
 
     def test_set_material_default_name(self, client, test_cube):
         result = call_tool(client, "set_material", {
-            "object": test_cube, "color": [1, 1, 1],
+            "target": test_cube, "color": [1, 1, 1],
         })
         assert "Mat_" in result["material"]
 
     def test_set_material_not_found(self, client):
         with pytest.raises(RuntimeError, match="not found"):
             call_tool(client, "set_material", {
-                "object": "NonExistentMatObj",
+                "target": "NonExistentMatObj",
             })
 
 
@@ -327,34 +333,34 @@ class TestScene:
 class TestModifiers:
     def test_add_modifier_subsurf(self, client, test_cube):
         result = call_tool(client, "add_modifier", {
-            "object": test_cube, "type": "subsurf",
+            "target": test_cube, "type": "subsurf",
             "params": {"levels": 2},
         })
         assert "subsurf" in result["modifier"]
 
     def test_add_modifier_mirror(self, client, test_cube):
         result = call_tool(client, "add_modifier", {
-            "object": test_cube, "type": "mirror",
+            "target": test_cube, "type": "mirror",
         })
         assert "mirror" in result["modifier"]
 
     def test_add_modifier_bevel(self, client, test_cube):
         result = call_tool(client, "add_modifier", {
-            "object": test_cube, "type": "bevel",
+            "target": test_cube, "type": "bevel",
             "params": {"width": 0.05, "segments": 2},
         })
         assert "bevel" in result["modifier"]
 
     def test_add_modifier_array(self, client, test_cube):
         result = call_tool(client, "add_modifier", {
-            "object": test_cube, "type": "array",
+            "target": test_cube, "type": "array",
             "params": {"count": 5},
         })
         assert "array" in result["modifier"]
 
     def test_add_modifier_solidify(self, client, test_cube):
         result = call_tool(client, "add_modifier", {
-            "object": test_cube, "type": "solidify",
+            "target": test_cube, "type": "solidify",
             "params": {"thickness": 0.1},
         })
         assert "solidify" in result["modifier"]
@@ -375,13 +381,13 @@ class TestModifiers:
 class TestEditMode:
     def test_edit_mode_enter(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        result = call_tool(client, "edit_mode_enter", {"object": test_cube})
+        result = call_tool(client, "edit_mode_enter", {"target": test_cube})
         assert result["mode"] == "EDIT"
         call_tool(client, "edit_mode_exit")
 
     def test_edit_mode_exit(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         result = call_tool(client, "edit_mode_exit")
         assert result["mode"] == "OBJECT"
 
@@ -393,7 +399,7 @@ class TestEditMode:
 
     def test_mesh_select_all(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         result = call_tool(client, "mesh_select_all", {"action": "SELECT"})
         assert result["action"] == "SELECT"
         call_tool(client, "mesh_select_all", {"action": "DESELECT"})
@@ -402,7 +408,7 @@ class TestEditMode:
 
     def test_mesh_select_by_type(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         for sel_type in ["VERT", "EDGE", "FACE"]:
             result = call_tool(client, "mesh_select_by_type", {"type": sel_type})
             assert result["selection_mode"] == sel_type
@@ -410,7 +416,7 @@ class TestEditMode:
 
     def test_mesh_select_loop(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "EDGE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_select_loop")
@@ -419,7 +425,7 @@ class TestEditMode:
 
     def test_mesh_select_ring(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "EDGE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_select_ring")
@@ -428,7 +434,7 @@ class TestEditMode:
 
     def test_mesh_select_more_less(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "FACE"})
         # Select one face
         run_python(client, (
@@ -447,7 +453,7 @@ class TestEditMode:
 
     def test_mesh_select_by_axis(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "VERT"})
         result = call_tool(client, "mesh_select_by_axis", {
             "axis": "X", "sign": "POSITIVE",
@@ -459,7 +465,7 @@ class TestEditMode:
 
     def test_mesh_extrude(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "FACE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_extrude", {
@@ -470,7 +476,7 @@ class TestEditMode:
 
     def test_mesh_inset(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "FACE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_inset", {
@@ -481,7 +487,7 @@ class TestEditMode:
 
     def test_mesh_bevel(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "EDGE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_bevel", {
@@ -492,16 +498,16 @@ class TestEditMode:
 
     def test_mesh_loop_cut(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         result = call_tool(client, "mesh_loop_cut", {
-            "count": 2, "object": test_cube,
+            "count": 2, "target": test_cube,
         })
         assert result["cuts"] == 2
         call_tool(client, "edit_mode_exit")
 
     def test_mesh_bisect(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         result = call_tool(client, "mesh_bisect", {
             "plane_co": [0, 0, 0],
             "plane_no": [0, 1, 0],
@@ -512,7 +518,7 @@ class TestEditMode:
 
     def test_mesh_knife(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         result = call_tool(client, "mesh_knife", {
             "points": [[-1, -1, 0], [1, 1, 0]],
         })
@@ -521,7 +527,7 @@ class TestEditMode:
 
     def test_mesh_merge_by_distance(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "VERT"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_merge", {
@@ -532,7 +538,7 @@ class TestEditMode:
 
     def test_mesh_merge_at_center(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "VERT"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_merge", {"method": "AT_CENTER"})
@@ -541,7 +547,7 @@ class TestEditMode:
 
     def test_mesh_delete(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "FACE"})
         # Select first face if it exists, otherwise all faces
         run_python(client, (
@@ -558,7 +564,7 @@ class TestEditMode:
 
     def test_mesh_fill(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         # Ensure we have a face to remove; if cube was mangled, restore it
         run_python(client, (
             "bm = bmesh.from_edit_mesh(C.active_object.data)\n"
@@ -577,7 +583,7 @@ class TestEditMode:
 
     def test_mesh_subdivide(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_subdivide", {
             "cuts": 2, "smoothness": 0.1,
@@ -587,7 +593,7 @@ class TestEditMode:
 
     def test_mesh_split(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "FACE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_split", {"method": "SELECTION"})
@@ -596,7 +602,7 @@ class TestEditMode:
 
     def test_mesh_separate(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "FACE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_separate")
@@ -611,7 +617,7 @@ class TestEditMode:
 
     def test_mesh_poke(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "FACE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_poke")
@@ -620,7 +626,7 @@ class TestEditMode:
 
     def test_mesh_triangulate(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "FACE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_triangulate")
@@ -629,7 +635,7 @@ class TestEditMode:
 
     def test_mesh_limited_dissolve(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_limited_dissolve", {
             "angle_limit": 0.05, "dissolve_type": "ALL",
@@ -639,7 +645,7 @@ class TestEditMode:
 
     def test_mesh_delete_loose(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_delete_loose", {"type": "ALL"})
         assert result["type"] == "ALL"
@@ -653,24 +659,24 @@ class TestEditMode:
 class TestShading:
     def test_shade_smooth(self, client, test_cube):
         result = call_tool(client, "shade_smooth", {
-            "object": test_cube,
+            "target": test_cube,
         })
         assert result["shading"] == "smooth"
 
     def test_shade_flat(self, client, test_cube):
-        result = call_tool(client, "shade_flat", {"object": test_cube})
+        result = call_tool(client, "shade_flat", {"target": test_cube})
         assert result["shading"] == "flat"
 
     def test_normals_recalculate(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         result = call_tool(client, "mesh_normals_recalculate", {"direction": "OUTSIDE"})
         assert result["direction"] == "OUTSIDE"
         call_tool(client, "edit_mode_exit")
 
     def test_flip_normals(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "FACE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_flip_normals")
@@ -699,7 +705,7 @@ class TestPrecision:
 
     def test_set_origin_to_geometry(self, client, test_cube):
         result = call_tool(client, "set_origin", {
-            "object": test_cube, "origin_to": "GEOMETRY",
+            "target": test_cube, "origin_to": "GEOMETRY",
         })
         assert result["origin"] == "GEOMETRY"
 
@@ -708,7 +714,7 @@ class TestPrecision:
             "name": test_cube, "scale": [2, 2, 2],
         })
         result = call_tool(client, "apply_transform", {
-            "object": test_cube,
+            "target": test_cube,
             "apply_location": True,
             "apply_rotation": True,
             "apply_scale": True,
@@ -719,16 +725,16 @@ class TestPrecision:
             "name": test_cube, "scale": [1, 1, 1],
         })
         call_tool(client, "apply_transform", {
-            "object": test_cube,
+            "target": test_cube,
         })
 
     def test_mesh_transform_selected(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "VERT"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_transform_selected", {
-            "object": test_cube,
+            "target": test_cube,
             "mode": "TRANSLATE",
             "value": [1, 0, 0],
             "orient_type": "GLOBAL",
@@ -738,7 +744,7 @@ class TestPrecision:
 
     def test_mesh_vert_slide(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "VERT"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_vert_slide", {"value": 0.5})
@@ -747,7 +753,7 @@ class TestPrecision:
 
     def test_mesh_edge_slide(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "EDGE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_edge_slide", {"value": 0.5})
@@ -773,26 +779,26 @@ class TestPrecision:
 class TestVertexGroups:
     def test_vertex_group_create(self, client, test_cube):
         result = call_tool(client, "vertex_group_create", {
-            "object": test_cube, "group_name": "TestGroup",
+            "target": test_cube, "group_name": "TestGroup",
         })
         assert result["vertex_group"] == "TestGroup"
 
     def test_vertex_group_assign(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "vertex_group_assign", {
-            "object": test_cube, "group_name": "TestGroup", "weight": 0.8,
+            "target": test_cube, "group_name": "TestGroup", "weight": 0.8,
         })
         assert result["group"] == "TestGroup"
         call_tool(client, "edit_mode_exit")
 
     def test_vertex_group_remove(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "vertex_group_remove", {
-            "object": test_cube, "group_name": "TestGroup",
+            "target": test_cube, "group_name": "TestGroup",
         })
         assert result["group"] == "TestGroup"
         call_tool(client, "edit_mode_exit")
@@ -801,19 +807,19 @@ class TestVertexGroups:
 class TestShapeKeys:
     def test_shape_key_basis(self, client, test_cube):
         result = call_tool(client, "shape_key_create", {
-            "object": test_cube, "key_name": "Basis",
+            "target": test_cube, "key_name": "Basis",
         })
         assert "Basis" in result["shape_key"]
 
     def test_shape_key_relative(self, client, test_cube):
         result = call_tool(client, "shape_key_create", {
-            "object": test_cube, "key_name": "Smile",
+            "target": test_cube, "key_name": "Smile",
         })
         assert "Smile" in result["shape_key"]
 
     def test_shape_key_set_value(self, client, test_cube):
         result = call_tool(client, "shape_key_set_value", {
-            "object": test_cube, "key_name": "Smile", "value": 0.5,
+            "target": test_cube, "key_name": "Smile", "value": 0.5,
         })
         assert result["value"] == 0.5
 
@@ -829,7 +835,7 @@ class TestCollections:
 
     def test_collection_add_object(self, client, test_cube):
         result = call_tool(client, "collection_add_object", {
-            "object": test_cube, "collection": "TestCollection",
+            "target": test_cube, "collection": "TestCollection",
         })
         assert result["object"] == test_cube
         assert result["collection"] == "TestCollection"
@@ -875,7 +881,7 @@ class TestMeasurement:
         assert "angle_rad" in result
 
     def test_get_mesh_stats(self, client, test_cube):
-        result = call_tool(client, "get_mesh_stats", {"object": test_cube})
+        result = call_tool(client, "get_mesh_stats", {"target": test_cube})
         assert result["object"] == test_cube
         assert isinstance(result["vertices"], int)
 
@@ -887,7 +893,7 @@ class TestMeasurement:
 class TestMarking:
     def test_mesh_crease(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "EDGE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_crease", {"weight": 0.8})
@@ -896,7 +902,7 @@ class TestMarking:
 
     def test_mesh_mark_sharp(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "EDGE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_mark_sharp")
@@ -908,7 +914,7 @@ class TestMarking:
 
     def test_mesh_mark_seam(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "EDGE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_mark_seam")
@@ -917,14 +923,14 @@ class TestMarking:
 
     def test_mesh_symmetrize(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         result = call_tool(client, "mesh_symmetrize", {"direction": "POSITIVE_X"})
         assert result["direction"] == "POSITIVE_X"
         call_tool(client, "edit_mode_exit")
 
     def test_set_normals_from_faces(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "FACE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_set_normals_from_faces")
@@ -933,7 +939,7 @@ class TestMarking:
 
     def test_normals_smooth(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "FACE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_normals_smooth")
@@ -955,7 +961,7 @@ class TestAdvancedMesh:
 
     def test_mesh_grid_fill(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         # Create a hole then grid fill
         run_python(client, (
             "bm = bmesh.from_edit_mesh(C.active_object.data)\n"
@@ -972,7 +978,7 @@ class TestAdvancedMesh:
 
     def test_mesh_bridge(self, client, test_cube):
         call_tool(client, "select_object", {"name": test_cube})
-        call_tool(client, "edit_mode_enter", {"object": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
         call_tool(client, "mesh_select_by_type", {"type": "EDGE"})
         call_tool(client, "mesh_select_all", {"action": "SELECT"})
         result = call_tool(client, "mesh_bridge", {"segments": 2})
@@ -1013,3 +1019,418 @@ class TestErrorHandling:
     def test_sse_nonexistent_task(self, client):
         resp = client.get(f"{BLENDER_URL}/api/sse/nonexistent-task-id")
         assert resp.status_code == 404
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  Curves
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestCurves:
+
+    _curve_name_bezier = "TestCurve_Bezier"
+    _curve_name_nurbs = "TestCurve_NURBS"
+
+    def test_create_curve_bezier(self, client):
+        result = call_tool(client, "create_curve", {
+            "type": "BEZIER",
+            "points": [[-1, 0, 0], [0, 1, 0], [1, 0, 0]],
+            "name": self._curve_name_bezier,
+            "bevel_depth": 0.05,
+        })
+        assert result["type"] == "BEZIER"
+        assert result["points"] == 3
+        assert self._curve_name_bezier in result["name"]
+
+    def test_create_curve_nurbs(self, client):
+        result = call_tool(client, "create_curve", {
+            "type": "NURBS",
+            "points": [[0, 0, 0], [1, 1, 0], [2, 0, 0], [3, 1, 0]],
+            "name": self._curve_name_nurbs,
+            "order": 3,
+        })
+        assert result["type"] == "NURBS"
+        assert result["points"] == 4
+
+    def test_create_curve_validation(self, client):
+        with pytest.raises(RuntimeError, match="At least 2 control points"):
+            call_tool(client, "create_curve", {
+                "type": "BEZIER", "points": [[0, 0, 0]],
+            })
+
+    def test_convert_curve_to_mesh(self, client):
+        call_tool(client, "create_curve", {
+            "type": "BEZIER",
+            "points": [[-1, 0, 0], [0, 1, 0], [1, 0, 0]],
+            "name": self._curve_name_bezier,
+            "bevel_depth": 0.05,
+        })
+        result = call_tool(client, "convert_curve_mesh", {
+            "target": self._curve_name_bezier,
+            "direction": "TO_MESH",
+        })
+        assert result["result_type"] == "MESH"
+        # Convert back for cleanup
+        call_tool(client, "convert_curve_mesh", {
+            "target": result["result"],
+            "direction": "TO_CURVE",
+        })
+
+    def test_convert_mesh_to_curve(self, client):
+        # Create a plane (which has edges that convert cleanly to curves)
+        call_tool(client, "create_object", {
+            "type": "cube", "name": "MeshForCurveConv",
+        })
+        result = call_tool(client, "convert_curve_mesh", {
+            "target": "MeshForCurveConv",
+            "direction": "TO_CURVE",
+        })
+        assert result["result_type"] == "CURVE"
+        call_tool(client, "delete_object", {"name": result["result"]})
+
+    def test_cleanup_curves(self, client):
+        for name in [self._curve_name_bezier, self._curve_name_nurbs]:
+            try:
+                call_tool(client, "delete_object", {"name": name})
+            except Exception:
+                pass
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  UV
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestUV:
+    @pytest.fixture
+    def test_cube(self, client):
+        """Fresh cube for UV tests (shadow module-scoped test_cube)."""
+        result = call_tool(client, "create_object", {
+            "type": "cube", "name": "TestCube_UV", "location": [0, 0, 0],
+        })
+        name = result["name"]
+        yield name
+        try:
+            call_tool(client, "delete_object", {"name": name})
+        except Exception:
+            pass
+
+    def test_uv_unwrap_smart(self, client, test_cube):
+        result = call_tool(client, "uv_unwrap", {
+            "target": test_cube, "method": "SMART", "margin": 0.02,
+        })
+        assert result["object"] == test_cube
+        assert result["method"] == "SMART"
+
+    def test_uv_unwrap_angle(self, client, test_cube):
+        result = call_tool(client, "uv_unwrap", {
+            "target": test_cube, "method": "ANGLE_BASED",
+        })
+        assert result["method"] == "ANGLE_BASED"
+
+    def test_uv_unwrap_cube(self, client, test_cube):
+        result = call_tool(client, "uv_unwrap", {
+            "target": test_cube, "method": "CUBE", "cube_size": 2.0,
+        })
+        assert result["method"] == "CUBE"
+
+    def test_uv_pack(self, client, test_cube):
+        # Ensure UV layer exists first
+        call_tool(client, "uv_unwrap", {
+            "target": test_cube, "method": "SMART",
+        })
+        result = call_tool(client, "uv_pack", {
+            "target": test_cube, "margin": 0.01, "rotate": True,
+        })
+        assert result["object"] == test_cube
+        assert result["margin"] == 0.01
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  Extended Modifiers (new types)
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestExtendedModifiers:
+    def test_add_modifier_screw(self, client, test_cube):
+        result = call_tool(client, "add_modifier", {
+            "target": test_cube, "type": "screw",
+            "params": {"angle": 6.28319, "steps": 16, "axis": "Z"},
+        })
+        assert "screw" in result["modifier"].lower()
+
+    def test_add_modifier_simple_deform(self, client, test_cube):
+        result = call_tool(client, "add_modifier", {
+            "target": test_cube, "type": "simple_deform",
+            "params": {"method": "BEND", "angle": 1.57, "deform_axis": "Z"},
+        })
+        assert "simple_deform" in result["modifier"].lower()
+
+    def test_add_modifier_shrinkwrap(self, client, test_cube):
+        # Create a target for shrinkwrap
+        target_result = call_tool(client, "create_object", {
+            "type": "sphere", "name": "ShrinkTarget",
+            "location": [0, 0, 0],
+        })
+        target_name = target_result["name"]
+        result = call_tool(client, "add_modifier", {
+            "target": test_cube, "type": "shrinkwrap",
+            "params": {"target": target_name, "offset": 0.1},
+        })
+        assert "shrinkwrap" in result["modifier"].lower()
+        call_tool(client, "delete_object", {"name": target_name})
+
+    def test_add_modifier_decimate(self, client, test_cube):
+        result = call_tool(client, "add_modifier", {
+            "target": test_cube, "type": "decimate",
+            "params": {"ratio": 0.5},
+        })
+        assert "decimate" in result["modifier"].lower()
+
+    def test_add_modifier_remesh(self, client, test_cube):
+        result = call_tool(client, "add_modifier", {
+            "target": test_cube, "type": "remesh",
+            "params": {"mode": "SMOOTH", "octree_depth": 5},
+        })
+        assert "remesh" in result["modifier"].lower()
+
+    def test_add_modifier_weld(self, client, test_cube):
+        result = call_tool(client, "add_modifier", {
+            "target": test_cube, "type": "weld",
+            "params": {"merge_threshold": 0.01},
+        })
+        assert "weld" in result["modifier"].lower()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  Light & Camera
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestLightCamera:
+    def test_create_light_point(self, client):
+        result = call_tool(client, "create_light", {
+            "type": "POINT", "energy": 200, "color": [1, 0.9, 0.8],
+            "location": [5, 0, 5],
+        })
+        assert result["type"] == "POINT"
+        assert result["energy"] == 200
+        call_tool(client, "delete_object", {"name": result["name"]})
+
+    def test_create_light_all_types(self, client):
+        for lt in ["SUN", "SPOT", "AREA"]:
+            result = call_tool(client, "create_light", {
+                "type": lt, "location": [0, 0, 0],
+            })
+            assert result["type"] == lt
+            call_tool(client, "delete_object", {"name": result["name"]})
+
+    def test_create_camera_perspective(self, client):
+        result = call_tool(client, "create_camera", {
+            "type": "PERSPECTIVE",
+            "location": [5, -5, 5],
+            "rotation": [0.8, 0, 0.8],
+            "focal_length": 35,
+            "make_active": False,
+        })
+        assert result["type"] == "PERSPECTIVE"
+        assert result["focal_length"] == 35
+        call_tool(client, "delete_object", {"name": result["name"]})
+
+    def test_create_camera_types(self, client):
+        result = call_tool(client, "create_camera", {
+            "type": "ORTHOGRAPHIC",
+            "orthographic_scale": 10,
+            "make_active": True,
+        })
+        assert result["type"] == "ORTHOGRAPHIC"
+        call_tool(client, "delete_object", {"name": result["name"]})
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  Alignment
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestAlignment:
+    @pytest.fixture
+    def test_cube(self, client):
+        """Fresh cube for each alignment test (shadow module-scoped test_cube)."""
+        result = call_tool(client, "create_object", {
+            "type": "cube", "name": "TestCube_Align", "location": [0, 0, 0],
+        })
+        name = result["name"]
+        yield name
+        try:
+            call_tool(client, "delete_object", {"name": name})
+        except Exception:
+            pass
+
+    def test_align_objects_center(self, client, test_cube, test_sphere):
+        call_tool(client, "transform_object", {
+            "name": test_cube, "location": [0, 2, 0],
+        })
+        call_tool(client, "transform_object", {
+            "name": test_sphere, "location": [5, -1, 3],
+        })
+        result = call_tool(client, "align_objects", {
+            "objects": [test_cube, test_sphere],
+            "axis": "Y", "align_to": "CENTER",
+        })
+        assert result["aligned_objects"] == 2
+        assert result["axis"] == "Y"
+
+    def test_align_objects_min(self, client, test_cube, test_sphere):
+        result = call_tool(client, "align_objects", {
+            "objects": [test_cube, test_sphere],
+            "axis": "X", "align_to": "MIN",
+        })
+        assert result["aligned_objects"] == 2
+
+    def test_align_objects_with_reference(self, client, test_cube, test_sphere):
+        result = call_tool(client, "align_objects", {
+            "objects": [test_sphere],
+            "axis": "Z", "align_to": "MAX",
+            "reference": test_cube,
+        })
+        assert result["reference"] == test_cube
+
+    def test_align_vertices(self, client, test_cube):
+        call_tool(client, "select_object", {"name": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
+        call_tool(client, "mesh_select_all", {"action": "SELECT"})
+        result = call_tool(client, "align_vertices", {
+            "target": test_cube, "axis": "Y",
+        })
+        assert result["axis"] == "Y"
+        assert result["aligned_vertices"] > 0
+        call_tool(client, "edit_mode_exit")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  Advanced Selection
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestAdvancedSelection:
+    @pytest.fixture
+    def test_cube(self, client):
+        """Fresh cube for selection tests (shadow module-scoped test_cube)."""
+        result = call_tool(client, "create_object", {
+            "type": "cube", "name": "TestCube_Select", "location": [0, 0, 0],
+        })
+        name = result["name"]
+        yield name
+        try:
+            call_tool(client, "delete_object", {"name": name})
+        except Exception:
+            pass
+
+    def test_select_similar(self, client, test_cube):
+        call_tool(client, "select_object", {"name": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
+        call_tool(client, "mesh_select_by_type", {"type": "FACE"})
+        call_tool(client, "mesh_select_all", {"action": "SELECT"})
+        result = call_tool(client, "select_similar", {
+            "type": "AREA", "threshold": 0.1,
+        })
+        assert result["similar_type"] == "AREA"
+        call_tool(client, "edit_mode_exit")
+
+    def test_select_linked(self, client, test_cube):
+        call_tool(client, "select_object", {"name": test_cube})
+        call_tool(client, "edit_mode_enter", {"target": test_cube})
+        call_tool(client, "mesh_select_by_type", {"type": "VERT"})
+        # Select one vertex
+        run_python(client, (
+            "bm = bmesh.from_edit_mesh(C.active_object.data)\n"
+            "bm.verts.ensure_lookup_table()\n"
+            "for v in bm.verts: v.select = False\n"
+            "if bm.verts: bm.verts[0].select = True\n"
+            "bmesh.update_edit_mesh(C.active_object.data)\n"
+            "result = True"
+        ))
+        result = call_tool(client, "select_linked")
+        assert "delimit" in result
+        call_tool(client, "edit_mode_exit")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  Viewport & Scene
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestViewport:
+    def test_set_viewport_shading(self, client):
+        for shading in ["WIREFRAME", "SOLID", "MATERIAL"]:
+            result = call_tool(client, "set_viewport", {
+                "shading": shading,
+            })
+            assert result["viewport"]["shading"] == shading
+
+    def test_set_viewport_xray(self, client):
+        result = call_tool(client, "set_viewport", {
+            "show_xray": True, "show_wireframe": True,
+        })
+        assert result["viewport"]["xray"] is True
+
+    def test_set_viewport_axis(self, client):
+        result = call_tool(client, "set_viewport", {
+            "view_axis": "FRONT",
+        })
+        assert result["viewport"]["view_axis"] == "FRONT"
+
+    def test_render_scene(self, client):
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            output = f.name
+        result = call_tool(client, "render_scene", {
+            "output_path": output,
+            "resolution_x": 320,
+            "resolution_y": 240,
+            "samples": 16,
+        })
+        assert "output_path" in result
+        assert result["resolution"] == [320, 240]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  Import / Export
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestIO:
+    def test_import_file_unsupported_format(self, client):
+        with pytest.raises(RuntimeError, match="Unsupported"):
+            call_tool(client, "import_file", {
+                "filepath": "test.xyz", "format": "XYZ",
+            })
+
+    def test_export_file_unsupported_format(self, client):
+        with pytest.raises(RuntimeError, match="Unsupported"):
+            call_tool(client, "export_file", {
+                "filepath": "out.xyz", "format": "XYZ",
+            })
+
+    def test_export_file_obj(self, client, test_cube):
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".obj", delete=False) as f:
+            output = f.name
+        call_tool(client, "select_object", {"name": test_cube})
+        result = call_tool(client, "export_file", {
+            "filepath": output,
+            "format": "OBJ",
+            "use_selection": True,
+        })
+        assert result["format"] == "OBJ"
+        import os
+        assert os.path.exists(output)
+        os.unlink(output)
+
+    def test_import_file_obj(self, client, test_cube):
+        import tempfile, os
+        # Export first to get a test file
+        with tempfile.NamedTemporaryFile(suffix=".obj", delete=False) as f:
+            export_path = f.name
+        call_tool(client, "select_object", {"name": test_cube})
+        call_tool(client, "export_file", {
+            "filepath": export_path, "format": "OBJ", "use_selection": True,
+        })
+        # Import it back
+        result = call_tool(client, "import_file", {
+            "filepath": export_path, "format": "OBJ",
+        })
+        assert "imported" in result
+        os.unlink(export_path)

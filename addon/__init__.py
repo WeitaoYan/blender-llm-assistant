@@ -1,56 +1,19 @@
-import sys
-import subprocess
+import uuid
+
 import bpy  # type: ignore
 
 bl_info = {
     "name": "Blender LLM Assistant",
     "author": "Yan Weitao",
     "version": (1, 0, 0),
-    "blender": (4, 0, 0),
+    "blender": (4, 5, 0),
     "location": "View3D > Sidebar > LLM Assistant",
     "description": "Expose Blender modeling tools via HTTP API for AI assistants",
-    "doc_url": "https://github.com/your-org/blender-assistant",
-    "tracker_url": "https://github.com/your-org/blender-assistant/issues",
+    "doc_url": "https://github.com/WeitaoYan/blender-llm-assistant",
+    "tracker_url": "https://github.com/WeitaoYan/blender-llm-assistant",
     "support": "COMMUNITY",
     "category": "Development",
 }
-
-# --- 自动安装缺失的第三方依赖 ---
-REQUIRED_PACKAGES = ["fastapi", "uvicorn", "websockets"]
-
-
-def _ensure_dependencies():
-    """检查并安装缺失的 pip 包到 Blender 的 Python 环境中"""
-    missing = []
-    for pkg in REQUIRED_PACKAGES:
-        try:
-            __import__(pkg)
-        except ImportError:
-            missing.append(pkg)
-
-    if not missing:
-        return True
-
-    # 使用 Blender 自带的 Python 安装缺失的包
-    python_exe = sys.executable
-    try:
-        subprocess.check_call(
-            [python_exe, "-m", "pip", "install", *missing],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return True
-    except Exception:
-        print(f"[LLM Assistant] 自动安装失败: {missing}")
-        print(f"[LLM Assistant] 请手动运行: {python_exe} -m pip install {' '.join(missing)}")
-        return False
-
-
-if not _ensure_dependencies():
-    raise ImportError(
-        "无法自动安装依赖，请在 Blender 的 Python 中手动安装:\n"
-        f"{sys.executable} -m pip install {' '.join(REQUIRED_PACKAGES)}"
-    )
 
 import threading
 import logging
@@ -61,7 +24,7 @@ from .server import start_server, stop_server
 
 logger = logging.getLogger(__name__)
 
-_LOG_DIR = Path.home() / ".blender-assistant" / "logs"
+_LOG_DIR = Path.home() / ".blender-llm-assistant" / "logs"
 
 
 def _setup_addon_logging():
@@ -95,10 +58,27 @@ class LLMAssistantProperties(bpy.types.PropertyGroup):
         min=1024,
         max=65535,
     )
+    server_secret: bpy.props.StringProperty(
+        name="Secret Token",
+        description="Bearer token for HTTP API authentication. Auto-generated if left empty.",
+        default="",
+    )
     server_running: bpy.props.BoolProperty(
         name="Server Running",
         default=False,
     )
+
+
+class LLMASSISTANT_OT_copy_token(bpy.types.Operator):
+    bl_idname = "llm_assistant.copy_token"
+    bl_label = "Copy Token"
+    bl_description = "Copy the server token to clipboard"
+
+    def execute(self, context):
+        props = context.scene.llm_assistant_props
+        context.window_manager.clipboard = props.server_secret
+        self.report({"INFO"}, "Token copied to clipboard")
+        return {"FINISHED"}
 
 
 class LLMASSISTANT_OT_start_server(bpy.types.Operator):
@@ -113,9 +93,11 @@ class LLMASSISTANT_OT_start_server(bpy.types.Operator):
             return {"CANCELLED"}
 
         port = props.server_port
+        if not props.server_secret:
+            props.server_secret = uuid.uuid4().hex
         thread = threading.Thread(
             target=start_server,
-            args=(port,),
+            args=(port, props.server_secret),
             daemon=True,
         )
         thread.start()
@@ -156,14 +138,21 @@ class LLMASSISTANT_PT_panel(bpy.types.Panel):
 
         if props.server_running:
             layout.label(text=f"Running on port {props.server_port}", icon="CHECKBOX_HLT")
-            layout.operator("llm_assistant.stop_server")
+            row = layout.row(align=True)
+            row.label(text=f"Token: {props.server_secret}")
+            row.operator("llm_assistant.copy_token", text="", icon="COPYDOWN")
+            layout.operator("llm_assistant.stop_server", icon="CANCEL")
         else:
+            layout.prop(props, "server_secret")
+            row = layout.row(align=True)
+            row.operator("llm_assistant.copy_token", text="Copy Token", icon="COPYDOWN")
             layout.label(text="Server not running", icon="CANCEL")
-            layout.operator("llm_assistant.start_server")
+            layout.operator("llm_assistant.start_server", icon="PLAY")
 
 
 classes = [
     LLMAssistantProperties,
+    LLMASSISTANT_OT_copy_token,
     LLMASSISTANT_OT_start_server,
     LLMASSISTANT_OT_stop_server,
     LLMASSISTANT_PT_panel,
@@ -172,12 +161,25 @@ classes = [
 
 def register():
     for cls in classes:
-        bpy.utils.register_class(cls)
-    bpy.types.Scene.llm_assistant_props = bpy.props.PointerProperty(type=LLMAssistantProperties)
+        try:
+            bpy.utils.register_class(cls)
+        except RuntimeError:
+            pass
+    if not hasattr(bpy.types.Scene, "llm_assistant_props"):
+        bpy.types.Scene.llm_assistant_props = bpy.props.PointerProperty(type=LLMAssistantProperties)
 
 
 def unregister():
-    stop_server()
+    try:
+        stop_server()
+    except Exception:
+        pass
     for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
-    del bpy.types.Scene.llm_assistant_props
+        try:
+            bpy.utils.unregister_class(cls)
+        except RuntimeError:
+            pass
+    try:
+        del bpy.types.Scene.llm_assistant_props
+    except AttributeError:
+        pass

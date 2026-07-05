@@ -30,6 +30,44 @@ def _ensure_edit_mode(obj):
     return True
 
 
+def _find_view3d_context():
+    try:
+        area = bpy.context.area
+        if area and area.type == "VIEW_3D":
+            return {
+                "window": bpy.context.window,
+                "screen": bpy.context.screen,
+                "area": area,
+                "region": bpy.context.region,
+            }
+    except Exception:
+        pass
+    try:
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == "VIEW_3D":
+                    window_region = None
+                    for r in area.regions:
+                        if r.type == "WINDOW":
+                            window_region = r
+                            break
+                    return {"window": window, "screen": window.screen, "area": area, "region": window_region or (area.regions[0] if area.regions else None)}
+    except Exception:
+        pass
+    return None
+
+
+def _run_op(op_func, **kwargs):
+    ctx = _find_view3d_context()
+    if ctx:
+        try:
+            with bpy.context.temp_override(**ctx):
+                return op_func(**kwargs)
+        except Exception:
+            return op_func(**kwargs)
+    return op_func(**kwargs)
+
+
 def _ensure_object_mode():
     """Switch to object mode if not already."""
     if bpy.context.mode != "OBJECT":
@@ -46,22 +84,22 @@ def register_tools(registry):
         name="edit_mode_enter",
         description="Enter edit mode for a mesh object to modify its vertices, edges, or faces",
         parameters={
-            "object": {
+            "target": {
                 "type": "string",
                 "description": "Name of the mesh object to edit",
                 "required": True,
             },
         },
     )
-    def edit_mode_enter(object: str):
-        obj = _require_mesh_object(object)
+    def edit_mode_enter(target: str):
+        obj = _require_mesh_object(target)
         _ensure_object_mode()
         bpy.context.view_layer.objects.active = obj
         obj.select_set(True)
         bpy.ops.object.mode_set(mode="EDIT")
         bm = bmesh.from_edit_mesh(obj.data)
         return {
-            "object": object,
+            "object": obj.name,
             "mode": "EDIT",
             "vertices": len(bm.verts),
             "edges": len(bm.edges),
@@ -128,7 +166,25 @@ def register_tools(registry):
         action_upper = action.upper()
         if action_upper not in ("SELECT", "DESELECT", "INVERT"):
             raise ValueError(f"Unknown action: {action}. Use SELECT, DESELECT, or INVERT.")
-        bpy.ops.mesh.select_all(action=action_upper)
+
+        obj = bpy.context.active_object
+        bm = bmesh.from_edit_mesh(obj.data)
+
+        if action_upper == "SELECT":
+            for v in bm.verts: v.select = True
+            for e in bm.edges: e.select = True
+            for f in bm.faces: f.select = True
+        elif action_upper == "DESELECT":
+            for v in bm.verts: v.select = False
+            for e in bm.edges: e.select = False
+            for f in bm.faces: f.select = False
+        else:  # INVERT
+            for v in bm.verts: v.select = not v.select
+            for e in bm.edges: e.select = not e.select
+            for f in bm.faces: f.select = not f.select
+
+        bm.select_flush_mode()
+        bmesh.update_edit_mesh(obj.data, destructive=False)
         return {"action": action_upper}
 
     @registry.register(
@@ -149,6 +205,7 @@ def register_tools(registry):
         type_upper = type.upper()
         if type_upper not in type_map:
             raise ValueError(f"Unknown type: {type}. Use VERT, EDGE, or FACE.")
+        # 直接设置 context，不需要 _run_op
         bpy.context.tool_settings.mesh_select_mode = (
             type_upper == "VERT",
             type_upper == "EDGE",
@@ -257,7 +314,7 @@ def register_tools(registry):
                     e.select = False
 
         bm.select_flush_mode()
-        bmesh.update_edit_mesh(obj.data)
+        bmesh.update_edit_mesh(obj.data, destructive=False)
         return {"axis": axis.upper(), "side": sign.upper(), "threshold": threshold}
 
     # ================================================================
@@ -402,18 +459,18 @@ def register_tools(registry):
                 "description": "Slide smoothness factor 0-1 (default 0)",
                 "required": False,
             },
-            "object": {
+            "target": {
                 "type": "string",
                 "description": "Object name. If not provided, uses active object",
                 "required": False,
             },
         },
     )
-    def mesh_loop_cut(count: int = 1, smoothness: float = 0.0, object: str | None = None):
+    def mesh_loop_cut(count: int = 1, smoothness: float = 0.0, target: str | None = None):
         if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
 
-        obj = bpy.data.objects.get(object) if object else bpy.context.active_object
+        obj = bpy.data.objects.get(target) if target else bpy.context.active_object
         if obj is None or obj.type != "MESH":
             raise ValueError("No valid mesh object in edit mode")
         bm = bmesh.from_edit_mesh(obj.data)
@@ -684,7 +741,7 @@ def register_tools(registry):
                 if e.is_boundary:
                     e.select = True
             bm.select_flush_mode()
-            bmesh.update_edit_mesh(obj.data)
+            bmesh.update_edit_mesh(obj.data, destructive=False)
 
         bpy.ops.mesh.fill()
         bm = bmesh.from_edit_mesh(obj.data)
@@ -839,16 +896,16 @@ def register_tools(registry):
         name="shade_smooth",
         description="Set selected faces or entire object to smooth shading",
         parameters={
-            "object": {
+            "target": {
                 "type": "string",
                 "description": "Object name. Uses active object if not provided.",
                 "required": False,
             },
         },
     )
-    def shade_smooth(object: str | None = None):
-        if object:
-            obj = _require_mesh_object(object)
+    def shade_smooth(target: str | None = None):
+        if target:
+            obj = _require_mesh_object(target)
         else:
             obj = bpy.context.active_object
             if obj is None or obj.type != "MESH":
@@ -872,16 +929,16 @@ def register_tools(registry):
         name="shade_flat",
         description="Set selected faces or entire object to flat shading",
         parameters={
-            "object": {
+            "target": {
                 "type": "string",
                 "description": "Object name. Uses active object if not provided.",
                 "required": False,
             },
         },
     )
-    def shade_flat(object: str | None = None):
-        if object:
-            obj = _require_mesh_object(object)
+    def shade_flat(target: str | None = None):
+        if target:
+            obj = _require_mesh_object(target)
         else:
             obj = bpy.context.active_object
             if obj is None or obj.type != "MESH":
@@ -1010,7 +1067,7 @@ def register_tools(registry):
         name="set_origin",
         description="Set the origin of an object",
         parameters={
-            "object": {
+            "target": {
                 "type": "string",
                 "description": "Object name",
                 "required": True,
@@ -1022,8 +1079,8 @@ def register_tools(registry):
             },
         },
     )
-    def set_origin(object: str, origin_to: str = "GEOMETRY"):
-        obj = _require_mesh_object(object)
+    def set_origin(target: str, origin_to: str = "GEOMETRY"):
+        obj = _require_mesh_object(target)
         _ensure_object_mode()
         bpy.context.view_layer.objects.active = obj
         obj.select_set(True)
@@ -1040,8 +1097,8 @@ def register_tools(registry):
         bpy.ops.object.origin_set(type=origin_map[origin_upper])
 
         return {
-            "object": object,
-            "origin": origin_upper,
+                "object": target,
+                "origin": origin_upper,
             "new_location": list(obj.location),
         }
 
@@ -1049,7 +1106,7 @@ def register_tools(registry):
         name="apply_transform",
         description="Apply (freeze) object transforms (location, rotation, scale) to the mesh data",
         parameters={
-            "object": {
+            "target": {
                 "type": "string",
                 "description": "Object name",
                 "required": True,
@@ -1072,12 +1129,12 @@ def register_tools(registry):
         },
     )
     def apply_transform(
-        object: str,
+        target: str,
         apply_location: bool = True,
         apply_rotation: bool = True,
         apply_scale: bool = True,
     ):
-        obj = _require_mesh_object(object)
+        obj = _require_mesh_object(target)
         _ensure_object_mode()
         bpy.context.view_layer.objects.active = obj
         obj.select_set(True)
@@ -1089,7 +1146,7 @@ def register_tools(registry):
         )
 
         return {
-            "object": object,
+            "object": target,
             "location": list(obj.location),
             "rotation": list(obj.rotation_euler),
             "scale": list(obj.scale),
@@ -1103,7 +1160,7 @@ def register_tools(registry):
         name="vertex_group_create",
         description="Create a new vertex group on a mesh object",
         parameters={
-            "object": {
+            "target": {
                 "type": "string",
                 "description": "Object name",
                 "required": True,
@@ -1115,18 +1172,18 @@ def register_tools(registry):
             },
         },
     )
-    def vertex_group_create(object: str, group_name: str):
-        obj = _require_mesh_object(object)
+    def vertex_group_create(target: str, group_name: str):
+        obj = _require_mesh_object(target)
         vg = obj.vertex_groups.get(group_name)
         if vg is None:
             vg = obj.vertex_groups.new(name=group_name)
-        return {"object": object, "vertex_group": group_name, "index": vg.index}
+        return {"object": target, "vertex_group": group_name, "index": vg.index}
 
     @registry.register(
         name="vertex_group_assign",
         description="Assign selected vertices to a vertex group with a given weight",
         parameters={
-            "object": {
+            "target": {
                 "type": "string",
                 "description": "Object name",
                 "required": True,
@@ -1143,11 +1200,11 @@ def register_tools(registry):
             },
         },
     )
-    def vertex_group_assign(object: str, group_name: str, weight: float = 1.0):
-        obj = _require_mesh_object(object)
+    def vertex_group_assign(target: str, group_name: str, weight: float = 1.0):
+        obj = _require_mesh_object(target)
         vg = obj.vertex_groups.get(group_name)
         if vg is None:
-            raise ValueError(f"Vertex group '{group_name}' not found on '{object}'")
+            raise ValueError(f"Vertex group '{group_name}' not found on '{target}'")
 
         if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode to assign vertices. Use edit_mode_enter first.")
@@ -1155,17 +1212,15 @@ def register_tools(registry):
         bm = bmesh.from_edit_mesh(obj.data)
         selected_verts = [v for v in bm.verts if v.select]
 
-        # We need to exit edit mode briefly to assign via the API, or use bpy.ops
-        # Using bpy.ops approach
         bpy.ops.object.vertex_group_assign()
 
-        return {"object": object, "group": group_name, "weight": weight, "assigned_vertices": len(selected_verts)}
+        return {"object": target, "group": group_name, "weight": weight, "assigned_vertices": len(selected_verts)}
 
     @registry.register(
         name="vertex_group_remove",
         description="Remove selected vertices from a vertex group",
         parameters={
-            "object": {
+            "target": {
                 "type": "string",
                 "description": "Object name",
                 "required": True,
@@ -1177,23 +1232,23 @@ def register_tools(registry):
             },
         },
     )
-    def vertex_group_remove(object: str, group_name: str):
-        obj = _require_mesh_object(object)
+    def vertex_group_remove(target: str, group_name: str):
+        obj = _require_mesh_object(target)
         vg = obj.vertex_groups.get(group_name)
         if vg is None:
-            raise ValueError(f"Vertex group '{group_name}' not found on '{object}'")
+            raise ValueError(f"Vertex group '{group_name}' not found on '{target}'")
 
         if not bpy.context.mode.startswith("EDIT"):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
 
         bpy.ops.object.vertex_group_remove_from()
-        return {"object": object, "group": group_name}
+        return {"object": target, "group": group_name}
 
     @registry.register(
         name="shape_key_create",
         description="Create a shape key (basis or relative) on a mesh object",
         parameters={
-            "object": {
+            "target": {
                 "type": "string",
                 "description": "Object name",
                 "required": True,
@@ -1210,8 +1265,8 @@ def register_tools(registry):
             },
         },
     )
-    def shape_key_create(object: str, key_name: str, from_mix: bool = False):
-        obj = _require_mesh_object(object)
+    def shape_key_create(target: str, key_name: str, from_mix: bool = False):
+        obj = _require_mesh_object(target)
         _ensure_object_mode()
 
         if obj.data.shape_keys is None:
@@ -1219,15 +1274,15 @@ def register_tools(registry):
 
         if key_name.upper() != "BASIS":
             sk = obj.shape_key_add(name=key_name, from_mix=from_mix)
-            return {"object": object, "shape_key": key_name, "index": sk.name}
+            return {"object": target, "shape_key": key_name, "index": sk.name}
 
-        return {"object": object, "shape_key": "Basis", "note": "Basis already exists or was created"}
+        return {"object": target, "shape_key": "Basis", "note": "Basis already exists or was created"}
 
     @registry.register(
         name="shape_key_set_value",
         description="Set the influence value of a shape key",
         parameters={
-            "object": {
+            "target": {
                 "type": "string",
                 "description": "Object name",
                 "required": True,
@@ -1244,10 +1299,10 @@ def register_tools(registry):
             },
         },
     )
-    def shape_key_set_value(object: str, key_name: str, value: float = 1.0):
-        obj = _require_mesh_object(object)
+    def shape_key_set_value(target: str, key_name: str, value: float = 1.0):
+        obj = _require_mesh_object(target)
         if obj.data.shape_keys is None:
-            raise ValueError(f"Object '{object}' has no shape keys")
+            raise ValueError(f"Object '{target}' has no shape keys")
 
         sk = obj.data.shape_keys.key_blocks.get(key_name)
         if sk is None:
@@ -1255,7 +1310,7 @@ def register_tools(registry):
             raise ValueError(f"Shape key '{key_name}' not found. Available: {available}")
 
         sk.value = max(0.0, min(1.0, value))
-        return {"object": object, "shape_key": key_name, "value": sk.value}
+        return {"object": target, "shape_key": key_name, "value": sk.value}
 
     # ================================================================
     #  Collection & Hierarchy
@@ -1283,7 +1338,7 @@ def register_tools(registry):
         name="collection_add_object",
         description="Add an object to a collection",
         parameters={
-            "object": {
+            "target": {
                 "type": "string",
                 "description": "Object name",
                 "required": True,
@@ -1295,21 +1350,20 @@ def register_tools(registry):
             },
         },
     )
-    def collection_add_object(object: str, collection: str):
-        obj = bpy.data.objects.get(object)
+    def collection_add_object(target: str, collection: str):
+        obj = bpy.data.objects.get(target)
         if obj is None:
-            raise ValueError(f"Object '{object}' not found")
+            raise ValueError(f"Object '{target}' not found")
 
         coll = bpy.data.collections.get(collection)
         if coll is None:
             raise ValueError(f"Collection '{collection}' not found")
 
-        # Unlink from all other collections first
         for c in obj.users_collection:
             c.objects.unlink(obj)
         coll.objects.link(obj)
 
-        return {"object": object, "collection": collection}
+        return {"object": target, "collection": collection}
 
     @registry.register(
         name="set_parent",
@@ -1485,16 +1539,16 @@ def register_tools(registry):
         name="get_mesh_stats",
         description="Get detailed statistics about a mesh object",
         parameters={
-            "object": {
+            "target": {
                 "type": "string",
                 "description": "Object name. Uses active object if not provided.",
                 "required": False,
             },
         },
     )
-    def get_mesh_stats(object: str | None = None):
-        if object:
-            obj = _require_mesh_object(object)
+    def get_mesh_stats(target: str | None = None):
+        if target:
+            obj = _require_mesh_object(target)
         else:
             obj = bpy.context.active_object
             if obj is None or obj.type != "MESH":
@@ -1540,7 +1594,7 @@ def register_tools(registry):
         name="mesh_transform_selected",
         description="Move/rotate/scale selected geometry in edit mode with exact values",
         parameters={
-            "object": {
+            "target": {
                 "type": "string",
                 "description": "Object name",
                 "required": True,
@@ -1569,13 +1623,13 @@ def register_tools(registry):
         },
     )
     def mesh_transform_selected(
-        object: str,
+        target: str,
         mode: str = "TRANSLATE",
         value: list | None = None,
         orient_type: str = "GLOBAL",
         orient_axis: str = "Z",
     ):
-        obj = _require_mesh_object(object)
+        obj = _require_mesh_object(target)
         if not bpy.context.mode.startswith("EDIT") or bpy.context.active_object != obj:
             raise ValueError("Must be in edit mode on the specified object.")
 
@@ -1711,7 +1765,7 @@ def register_tools(registry):
         selected_edges = [e for e in bm.edges if e.select]
         for e in selected_edges:
             e[bm.edges.layers.float.get("crease_edge") or bm.edges.layers.float.new("crease_edge")] = weight
-        bmesh.update_edit_mesh(obj.data)
+        bmesh.update_edit_mesh(obj.data, destructive=False)
         return {"weight": weight, "creased_edges": len(selected_edges)}
 
     @registry.register(
@@ -1906,3 +1960,125 @@ def register_tools(registry):
             raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
         bpy.ops.mesh.faces_shade_smooth()
         return {"normals_smoothed": True}
+
+    # ================================================================
+    #  Advanced Selection (P0)
+    # ================================================================
+
+    @registry.register(
+        name="select_similar",
+        description="Select mesh elements similar to current selection (normal, area, perimeter, etc.)",
+        parameters={
+            "type": {
+                "type": "string",
+                "description": "Similarity type: NORMAL, AREA, PERIMETER, MATERIAL, COPLANAR, SMOOTH, LENGTH, DIR, CREASE, BEVEL, SEAM, SHARP, FREESTYLE_EDGE, FREESTYLE_FACE",
+                "required": True,
+            },
+            "threshold": {
+                "type": "number",
+                "description": "Comparison threshold (default 0.1)",
+                "required": False,
+            },
+        },
+    )
+    def select_similar(type: str, threshold: float = 0.1):
+        if not bpy.context.mode.startswith("EDIT"):
+            raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
+
+        type_map = {"AREA": "FACE_AREA", "NORMAL": "NORMAL", "PERIMETER": "PERIMETER",
+                    "MATERIAL": "MATERIAL", "COPLANAR": "COPLANAR", "SMOOTH": "SMOOTH",
+                    "LENGTH": "LENGTH", "DIR": "DIR", "CREASE": "CREASE",
+                    "BEVEL": "BEVEL", "SEAM": "SEAM", "SHARP": "SHARP",
+                    "FREESTYLE_EDGE": "FREESTYLE_EDGE", "FREESTYLE_FACE": "FREESTYLE_FACE"}
+        type_upper = type.upper()
+        if type_upper not in type_map:
+            raise ValueError(f"Unknown select_similar type: {type}")
+        _run_op(bpy.ops.mesh.select_similar, type=type_map[type_upper], threshold=threshold)
+        return {"similar_type": type_upper, "threshold": threshold}
+
+    @registry.register(
+        name="select_linked",
+        description="Select all mesh elements connected to the current selection",
+        parameters={
+            "delimit": {
+                "type": "string",
+                "description": "Delimit by: NORMAL, MATERIAL, SEAM, SHARP, UV (comma-separated). Empty = use active selection mode.",
+                "required": False,
+            },
+        },
+    )
+    def select_linked(delimit: str = ""):
+        if not bpy.context.mode.startswith("EDIT"):
+            raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
+
+        if delimit:
+            valid_delimits = {"NORMAL", "MATERIAL", "SEAM", "SHARP", "UV"}
+            delimits = []
+            for d in delimit.split(","):
+                d_stripped = d.strip().upper()
+                if d_stripped in valid_delimits:
+                    delimits.append(d_stripped)
+            bpy.ops.mesh.select_linked(delimit=set(delimits))
+        else:
+            bpy.ops.mesh.select_linked()
+
+        return {"delimit": delimit or "geometry_connected"}
+
+    # ================================================================
+    #  Precision Alignment in Edit Mode (P0)
+    # ================================================================
+
+    @registry.register(
+        name="align_vertices",
+        description="Align selected vertices along an axis in edit mode (to median position)",
+        parameters={
+            "target": {
+                "type": "string",
+                "description": "Mesh object name (uses active object if not provided)",
+                "required": False,
+            },
+            "axis": {
+                "type": "string",
+                "description": "Axis to align: X, Y, or Z",
+                "required": True,
+            },
+        },
+    )
+    def align_vertices(target: str | None = None, axis: str = "X"):
+        if target:
+            obj = _require_mesh_object(target)
+            if obj != bpy.context.active_object:
+                _ensure_object_mode()
+                bpy.context.view_layer.objects.active = obj
+                obj.select_set(True)
+            if not bpy.context.mode.startswith("EDIT"):
+                _ensure_edit_mode(obj)
+        else:
+            obj = bpy.context.active_object
+            if obj is None or obj.type != "MESH":
+                raise ValueError("No active mesh object. Specify target or select a mesh.")
+            if not bpy.context.mode.startswith("EDIT"):
+                raise ValueError("Must be in edit mode. Use edit_mode_enter first.")
+
+        axis_idx = {"X": 0, "Y": 1, "Z": 2}.get(axis.upper())
+        if axis_idx is None:
+            raise ValueError(f"Unknown axis: {axis}. Use X, Y, or Z.")
+
+        bm = bmesh.from_edit_mesh(obj.data)
+        selected = [v for v in bm.verts if v.select]
+        if not selected:
+            raise ValueError("No vertices selected")
+
+        median = sum(v.co[axis_idx] for v in selected) / len(selected)
+        for v in selected:
+            v.co[axis_idx] = median
+
+        bm.select_flush_mode()
+        bmesh.update_edit_mesh(obj.data, destructive=False)
+
+        return {
+            "object": obj.name,
+            "axis": axis.upper(),
+            "aligned_vertices": len(selected),
+            "value": median,
+        }

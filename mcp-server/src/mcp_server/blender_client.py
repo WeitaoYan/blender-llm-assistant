@@ -7,9 +7,10 @@ logger = logging.getLogger(__name__)
 
 
 class BlenderClient:
-    def __init__(self, base_url: str = "http://127.0.0.1:15800"):
+    def __init__(self, base_url: str = "http://127.0.0.1:15800", token: str | None = None):
         self.base_url = base_url
-        self._client = httpx.AsyncClient(timeout=30.0)
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        self._client = httpx.AsyncClient(timeout=30.0, headers=headers)
 
     async def list_tools(self) -> dict:
         logger.debug("Listing tools from Blender")

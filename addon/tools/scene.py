@@ -108,9 +108,11 @@ def register_tools(registry):
     @registry.register(
         name="execute_python",
         description=(
-            "Execute Python code in Blender's sandboxed namespace. "
-            "Only bpy, bmesh, mathutils, and math are available. "
-            "Dangerous builtins (__import__, open, eval, exec, compile) are blocked. "
+            "Execute Python code in Blender's restricted namespace. "
+            "WARNING: The sandbox limits direct dangerous calls but is not a security boundary. "
+            "Only expose this API to trusted clients. "
+            "Available: bpy, bmesh, mathutils, math. "
+            "Builtins filtered (open/eval/exec/compile blocked). "
             "Use 'result = ...' to return a value."
         ),
         parameters={
@@ -126,3 +128,260 @@ def register_tools(registry):
         sandbox_globals = _make_sandbox_globals()
         exec(code, sandbox_globals, local_scope)
         return {"executed": True, "result": local_scope.get("result", None)}
+
+    # ================================================================
+    #  Viewport Control
+    # ================================================================
+
+    @registry.register(
+        name="set_viewport",
+        description="Configure viewport display settings (shading, x-ray, wireframe overlay)",
+        parameters={
+            "shading": {
+                "type": "string",
+                "description": "Viewport shading: WIREFRAME, SOLID, MATERIAL, RENDERED",
+                "required": False,
+            },
+            "show_xray": {
+                "type": "boolean",
+                "description": "Enable x-ray (transparent) view",
+                "required": False,
+            },
+            "show_wireframe": {
+                "type": "boolean",
+                "description": "Show wireframe overlay on shaded view",
+                "required": False,
+            },
+            "view_axis": {
+                "type": "string",
+                "description": "Align view to axis: FRONT, BACK, LEFT, RIGHT, TOP, BOTTOM, or USER (default: no change)",
+                "required": False,
+            },
+        },
+    )
+    def set_viewport(
+        shading: str = "",
+        show_xray: bool | None = None,
+        show_wireframe: bool | None = None,
+        view_axis: str = "",
+    ):
+        updated = {"shading": None, "xray": None, "wireframe": None, "view_axis": None}
+
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type == "VIEW_3D":
+                    space = area.spaces.active
+
+                    if shading:
+                        shading_upper = shading.upper()
+                        if shading_upper not in ("WIREFRAME", "SOLID", "MATERIAL", "RENDERED"):
+                            raise ValueError(f"Unknown shading: {shading}")
+                        space.shading.type = shading_upper
+                        updated["shading"] = shading_upper
+
+                    if show_xray is not None:
+                        space.shading.show_xray = show_xray
+                        updated["xray"] = show_xray
+
+                    if show_wireframe is not None:
+                        space.overlay.show_wireframes = show_wireframe
+                        updated["wireframe"] = show_wireframe
+
+                    if view_axis:
+                        axis_upper = view_axis.upper()
+                        if axis_upper == "USER":
+                            pass
+                        else:
+                            ctx_override = {
+                                "window": window,
+                                "area": area,
+                                "region": area.regions[0] if area.regions else None,
+                            }
+                            with bpy.context.temp_override(**ctx_override):
+                                bpy.ops.view3d.view_axis(type=axis_upper)
+                            updated["view_axis"] = axis_upper
+
+                    break
+
+        return {"viewport": updated}
+
+    # ================================================================
+    #  Render
+    # ================================================================
+
+    @registry.register(
+        name="render_scene",
+        description="Render the current scene to an image file",
+        parameters={
+            "output_path": {
+                "type": "string",
+                "description": "Output file path (e.g. //render.png or C:/output/render.png)",
+                "required": False,
+            },
+            "resolution_x": {
+                "type": "integer",
+                "description": "Render width in pixels (default 1920)",
+                "required": False,
+            },
+            "resolution_y": {
+                "type": "integer",
+                "description": "Render height in pixels (default 1080)",
+                "required": False,
+            },
+            "samples": {
+                "type": "integer",
+                "description": "Render samples (Cycles) or TAA samples (EEVEE). Default 128.",
+                "required": False,
+            },
+        },
+    )
+    def render_scene(
+        output_path: str = "",
+        resolution_x: int = 1920,
+        resolution_y: int = 1080,
+        samples: int = 128,
+    ):
+        scene = bpy.context.scene
+
+        if scene.camera is None:
+            cam_data = bpy.data.cameras.new(name="RenderCamera")
+            cam_obj = bpy.data.objects.new(name="RenderCamera", object_data=cam_data)
+            cam_obj.location = (0, -10, 5)
+            cam_obj.rotation_euler = (1.1, 0, 0)
+            bpy.context.collection.objects.link(cam_obj)
+            scene.camera = cam_obj
+
+        if output_path:
+            scene.render.filepath = output_path
+
+        scene.render.resolution_x = max(1, resolution_x)
+        scene.render.resolution_y = max(1, resolution_y)
+
+        engine = scene.render.engine
+        if "CYCLES" in engine:
+            scene.cycles.samples = max(1, samples)
+        elif "EEVEE" in engine:
+            try:
+                scene.eevee.taa_render_samples = max(1, samples)
+            except Exception:
+                pass
+
+        original_format = scene.render.image_settings.file_format
+        if not output_path.lower().endswith((".png", ".jpg", ".jpeg", ".exr", ".tga", ".bmp", ".tiff", ".webp")):
+            scene.render.image_settings.file_format = "PNG"
+
+        try:
+            bpy.ops.render.render(write_still=True)
+        except Exception as e:
+            scene.render.image_settings.file_format = original_format
+            raise RuntimeError(f"Render failed: {e}")
+
+        scene.render.image_settings.file_format = original_format
+
+        return {
+            "output_path": scene.render.filepath,
+            "resolution": [scene.render.resolution_x, scene.render.resolution_y],
+            "samples": samples,
+            "engine": engine,
+        }
+
+    # ================================================================
+    #  Import / Export
+    # ================================================================
+
+    @registry.register(
+        name="import_file",
+        description="Import a 3D file into the scene",
+        parameters={
+            "filepath": {
+                "type": "string",
+                "description": "Full path to the file to import",
+                "required": True,
+            },
+            "format": {
+                "type": "string",
+                "description": "File format: OBJ, FBX, STL, GLTF, GLB, PLY, X3D, ABC, USD, SVG (auto-detected from extension if not provided)",
+                "required": False,
+            },
+        },
+    )
+    def import_file(filepath: str, format: str = ""):
+        import pathlib
+
+        ext = format.upper() if format else pathlib.Path(filepath).suffix[1:].upper()
+
+        if ext == "GLTF":
+            ext = "GLTF"
+
+        func_map = {
+            "OBJ": lambda filepath: bpy.ops.wm.obj_import(filepath=filepath),
+            "FBX": bpy.ops.import_scene.fbx,
+            "STL": bpy.ops.import_mesh.stl,
+            "GLTF": bpy.ops.import_scene.gltf,
+            "GLB": bpy.ops.import_scene.gltf,
+            "PLY": bpy.ops.import_mesh.ply,
+            "X3D": bpy.ops.import_scene.x3d,
+            "ABC": bpy.ops.import_alembic,
+            "USD": bpy.ops.import_scene.usd,
+            "SVG": bpy.ops.import_curve.svg,
+            "DAE": bpy.ops.wm.collada_import,
+        }
+
+        fn = func_map.get(ext)
+        if fn is None:
+            raise ValueError(f"Unsupported or unrecognized format: '{format or ext}'. Supported: {', '.join(func_map.keys())}")
+
+        fn(filepath=filepath)
+
+        return {"imported": filepath, "format": ext}
+
+    @registry.register(
+        name="export_file",
+        description="Export scene or selected objects to a file",
+        parameters={
+            "filepath": {
+                "type": "string",
+                "description": "Full output file path",
+                "required": True,
+            },
+            "format": {
+                "type": "string",
+                "description": "File format: OBJ, FBX, STL, GLTF, GLB, PLY, X3D, ABC, USD (auto-detected from extension if not provided)",
+                "required": False,
+            },
+            "use_selection": {
+                "type": "boolean",
+                "description": "Export only selected objects (default false = export entire scene)",
+                "required": False,
+            },
+        },
+    )
+    def export_file(filepath: str, format: str = "", use_selection: bool = False):
+        import pathlib
+
+        ext = format.upper() if format else pathlib.Path(filepath).suffix[1:].upper()
+
+        if ext == "GLTF":
+            ext = "GLTF"
+
+        func_map = {
+            "OBJ": lambda filepath, use_selection: bpy.ops.wm.obj_export(
+                filepath=filepath, export_selected_objects=use_selection),
+            "FBX": bpy.ops.export_scene.fbx,
+            "STL": bpy.ops.export_mesh.stl,
+            "GLTF": bpy.ops.export_scene.gltf,
+            "GLB": bpy.ops.export_scene.gltf,
+            "PLY": bpy.ops.export_mesh.ply,
+            "X3D": bpy.ops.export_scene.x3d,
+            "ABC": bpy.ops.export_alembic,
+            "USD": bpy.ops.export_scene.usd,
+            "DAE": bpy.ops.wm.collada_export,
+        }
+
+        fn = func_map.get(ext)
+        if fn is None:
+            raise ValueError(f"Unsupported or unrecognized format: '{format or ext}'. Supported: {', '.join(func_map.keys())}")
+
+        fn(filepath=filepath, use_selection=use_selection)
+
+        return {"exported": filepath, "format": ext, "use_selection": use_selection}

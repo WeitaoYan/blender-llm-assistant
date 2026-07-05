@@ -6,7 +6,7 @@ def register_tools(registry):
         name="set_material",
         description="Set material properties on an object",
         parameters={
-            "object": {
+            "target": {
                 "type": "string",
                 "description": "Name of the object",
                 "required": True,
@@ -34,13 +34,12 @@ def register_tools(registry):
             },
         },
     )
-    def set_material(object: str, color=None, metallic=None, roughness=None, material_name=None):
-        obj = bpy.data.objects.get(object)
+    def set_material(target: str, color=None, metallic=None, roughness=None, material_name=None):
+        obj = bpy.data.objects.get(target)
         if obj is None:
-            raise ValueError(f"Object '{object}' not found")
-
+            raise ValueError(f"Object '{target}' not found")
         if material_name is None:
-            material_name = f"Mat_{object}"
+            material_name = f"Mat_{target}"
 
         mat = bpy.data.materials.get(material_name)
         if mat is None:
@@ -76,7 +75,7 @@ def register_tools(registry):
             principled.inputs["Roughness"].default_value = roughness
 
         return {
-            "object": object,
+            "object": target,
             "material": material_name,
             "color": color,
             "metallic": metallic,

@@ -21,3 +21,5 @@ Thumbs.db
 .env
 .env.*
 .pytest_cache/
+
+AGENTS.md
