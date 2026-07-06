@@ -16,38 +16,52 @@ bl_info = {
 }
 
 import threading
-import logging
-import logging.handlers
 from pathlib import Path
 
 from .server import start_server, stop_server
 
-logger = logging.getLogger(__name__)
 
-_LOG_DIR = Path.home() / ".blender-llm-assistant" / "logs"
-
-
-def _setup_addon_logging():
-    _LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-    log_file = _LOG_DIR / "blender_addon.log"
-    handler = logging.handlers.RotatingFileHandler(
-        str(log_file), maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
-    )
-    handler.setFormatter(logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-    ))
-    handler.setLevel(logging.DEBUG)
-
-    root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
-    # Avoid duplicate handlers on reload
-    if not any(isinstance(h, logging.handlers.RotatingFileHandler) for h in root.handlers):
-        root.addHandler(handler)
-        logger.info(f"Logging to {log_file}")
+_CONFIG_DIR = Path.home() / ".blender-llm-assistant"
+_TOKEN_FILE = _CONFIG_DIR / "token.txt"
 
 
-_setup_addon_logging()
+def _load_persistent_token() -> str:
+    """从磁盘加载持久化的 token，不存在则返回空字符串。"""
+    try:
+        if _TOKEN_FILE.exists():
+            return _TOKEN_FILE.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _save_persistent_token(token: str):
+    """将 token 持久化到磁盘。"""
+    try:
+        _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        _TOKEN_FILE.write_text(token, encoding="utf-8")
+    except Exception:
+        pass
+
+
+
+def _server_secret_get(self):
+    """读取 token：优先返回场景中存储的值，否则从磁盘懒加载。"""
+    stored = self.get("server_secret", "")
+    if stored:
+        return stored
+    saved = _load_persistent_token()
+    if saved:
+        self["server_secret"] = saved
+        return saved
+    return ""
+
+
+def _server_secret_set(self, value):
+    """写入 token 并持久化到磁盘。"""
+    self["server_secret"] = value
+    if value:
+        _save_persistent_token(value)
 
 
 class LLMAssistantProperties(bpy.types.PropertyGroup):
@@ -62,6 +76,8 @@ class LLMAssistantProperties(bpy.types.PropertyGroup):
         name="Secret Token",
         description="Bearer token for HTTP API authentication. Auto-generated if left empty.",
         default="",
+        get=_server_secret_get,
+        set=_server_secret_set,
     )
     server_running: bpy.props.BoolProperty(
         name="Server Running",
@@ -81,6 +97,23 @@ class LLMASSISTANT_OT_copy_token(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class LLMASSISTANT_OT_regenerate_token(bpy.types.Operator):
+    bl_idname = "llm_assistant.regenerate_token"
+    bl_label = "Regenerate Token"
+    bl_description = "Generate a new random token and save it persistently"
+
+    def execute(self, context):
+        props = context.scene.llm_assistant_props
+        if props.server_running:
+            self.report({"WARNING"}, "Stop the server before regenerating token")
+            return {"CANCELLED"}
+        new_token = uuid.uuid4().hex
+        props.server_secret = new_token
+        _save_persistent_token(new_token)
+        self.report({"INFO"}, "New token generated and saved")
+        return {"FINISHED"}
+
+
 class LLMASSISTANT_OT_start_server(bpy.types.Operator):
     bl_idname = "llm_assistant.start_server"
     bl_label = "Start HTTP Server"
@@ -94,7 +127,13 @@ class LLMASSISTANT_OT_start_server(bpy.types.Operator):
 
         port = props.server_port
         if not props.server_secret:
-            props.server_secret = uuid.uuid4().hex
+            # 优先从磁盘加载持久化 token，没有则生成新的并保存
+            saved_token = _load_persistent_token()
+            if saved_token:
+                props.server_secret = saved_token
+            else:
+                props.server_secret = uuid.uuid4().hex
+                _save_persistent_token(props.server_secret)
         thread = threading.Thread(
             target=start_server,
             args=(port, props.server_secret),
@@ -146,6 +185,7 @@ class LLMASSISTANT_PT_panel(bpy.types.Panel):
             layout.prop(props, "server_secret")
             row = layout.row(align=True)
             row.operator("llm_assistant.copy_token", text="Copy Token", icon="COPYDOWN")
+            row.operator("llm_assistant.regenerate_token", text="New Token", icon="FILE_REFRESH")
             layout.label(text="Server not running", icon="CANCEL")
             layout.operator("llm_assistant.start_server", icon="PLAY")
 
@@ -153,6 +193,7 @@ class LLMASSISTANT_PT_panel(bpy.types.Panel):
 classes = [
     LLMAssistantProperties,
     LLMASSISTANT_OT_copy_token,
+    LLMASSISTANT_OT_regenerate_token,
     LLMASSISTANT_OT_start_server,
     LLMASSISTANT_OT_stop_server,
     LLMASSISTANT_PT_panel,
@@ -167,6 +208,14 @@ def register():
             pass
     if not hasattr(bpy.types.Scene, "llm_assistant_props"):
         bpy.types.Scene.llm_assistant_props = bpy.props.PointerProperty(type=LLMAssistantProperties)
+
+    # 预加载持久化 token：如果场景中 token 为空，尝试从磁盘加载
+    saved_token = _load_persistent_token()
+    if saved_token:
+        for scene in bpy.data.scenes:
+            props = scene.llm_assistant_props
+            if not props.server_secret:
+                props.server_secret = saved_token
 
 
 def unregister():

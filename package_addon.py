@@ -222,9 +222,21 @@ def start_server():
         from blender_llm_assistant.server import start_server
         import threading
         import uuid
+        from pathlib import Path
         
         port = {port}
-        secret = uuid.uuid4().hex
+        
+        # 优先从持久化文件加载 token
+        config_dir = Path.home() / ".blender-llm-assistant"
+        token_file = config_dir / "token.txt"
+        if token_file.exists():
+            secret = token_file.read_text(encoding="utf-8").strip()
+            logger.info(f"Loaded persistent token from {{token_file}}")
+        else:
+            secret = uuid.uuid4().hex
+            config_dir.mkdir(parents=True, exist_ok=True)
+            token_file.write_text(secret, encoding="utf-8")
+            logger.info(f"Generated and saved new token to {{token_file}}")
         
         logger.info(f"Starting HTTP server on port {{port}}...")
         
@@ -235,18 +247,13 @@ def start_server():
         )
         thread.start()
         
-        # 保存 token 到文件
-        token_file = addon_dir.parent / "server_token.txt"
-        with open(token_file, "w") as f:
-            f.write(secret)
-        
         logger.info(f"HTTP Server started on port {{port}}")
-        logger.info(f"Token saved to: {{token_file}}")
+        logger.info(f"Token file: {{token_file}}")
         logger.info(f"Token: {{secret}}")
         logger.info(f"API Endpoint: http://127.0.0.1:{{port}}")
         
         print(f"\\nHTTP Server started on port {{port}}")
-        print(f"Token saved to: {{token_file}}")
+        print(f"Token file: {{token_file}}")
         print(f"Token: {{secret}}")
         print(f"\\nAPI Endpoint: http://127.0.0.1:{{port}}")
         

@@ -4,7 +4,7 @@
 Blender version: 4.5
 Server:          sync HTTP (stdlib http.server.ThreadingHTTPServer)
 Test suite:      extensions/tests/test_http_api.py
-Run date:        2026-07-01
+Run date:        2026-07-06
 ```
 
 ## Summary
@@ -12,10 +12,10 @@ Run date:        2026-07-01
 | Metric           | Value            |
 | ---------------- | ---------------- |
 | Registered tools | 68               |
-| Test methods     | 93               |
-| Pass / Fail      | **93 / 0**       |
+| Test methods     | 127              |
+| Pass / Fail      | **127 / 0**      |
 | Tool coverage    | **100%** (68/68) |
-| Run time         | ~3.5 min         |
+| Run time         | ~7.8 min         |
 
 ## Module Breakdown
 
