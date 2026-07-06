@@ -9,32 +9,6 @@ def _deselect_all():
         o.select_set(False)
 
 
-def _view3d_ctx():
-    try:
-        area = bpy.context.area
-        if area and area.type == "VIEW_3D":
-            return {
-                "window": bpy.context.window,
-                "screen": bpy.context.screen,
-                "area": area,
-                "region": bpy.context.region,
-            }
-    except Exception:
-        pass
-    for window in bpy.context.window_manager.windows:
-        for area in window.screen.areas:
-            if area.type == "VIEW_3D":
-                region = None
-                for r in area.regions:
-                    if r.type == "WINDOW":
-                        region = r
-                        break
-                if region is None and area.regions:
-                    region = area.regions[-1]
-                return {"window": window, "screen": window.screen, "area": area, "region": region}
-    return None
-
-
 def _run_uv_op(op_func, **kwargs):
     return op_func(**kwargs)
 

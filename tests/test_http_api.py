@@ -21,7 +21,7 @@ from typing import Any
 pytestmark = pytest.mark.blender
 
 BLENDER_URL = "http://127.0.0.1:15800"
-AUTH_TOKEN = "f7b6f4b3602449f8a22b02de240a17d9"
+AUTH_TOKEN = "ffab71c59aa74f19888fed898eb3b7da"
 TOOL_TIMEOUT = 60.0
 _INTERVAL = 1  # seconds between tool calls to avoid overwhelming Blender
 

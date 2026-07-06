@@ -7,7 +7,7 @@ Usage:
 import json, time, httpx, sys
 
 URL = "http://127.0.0.1:15800"
-AUTH = {"Authorization": "Bearer f7b6f4b3602449f8a22b02de240a17d9"}
+AUTH = {"Authorization": "Bearer ffab71c59aa74f19888fed898eb3b7da"}
 
 
 def tool(name, params=None):
